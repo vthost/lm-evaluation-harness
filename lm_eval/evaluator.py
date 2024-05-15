@@ -219,7 +219,7 @@ def simple_evaluate(
     if not getattr(lm.config, "num_hidden_layers", None):  # somehow cannot use as a dict
         print("!! WARNING found no num_hidden_layers")  # may be critical if we need it for extraction
     for mid in ["generate", "forward_batch", "forward"]:
-        lm._extract_config[mid] = resolve_function(f"lm_eval.extract.{extract_id}_{mid}")
+        lm._extract_config[mid] = resolve_function(f"fmutils.extract.{extract_id}_{mid}")
 
     if task_manager is None:
         task_manager = TaskManager(verbosity)

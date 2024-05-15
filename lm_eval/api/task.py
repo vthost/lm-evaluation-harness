@@ -41,7 +41,7 @@ from lm_eval.api.registry import (
 from lm_eval.caching.cache import load_from_cache, save_to_cache
 from lm_eval.filters import build_filter_ensemble
 from lm_eval.prompts import get_prompt
-from miutils.file import list_to_txt_file # VT
+from fmutils.file import list_to_txt_file # VT
 
 ALL_OUTPUT_TYPES = [
     "loglikelihood",
