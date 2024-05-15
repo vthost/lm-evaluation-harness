@@ -3,6 +3,8 @@ import ast
 import logging
 import random
 import re
+import os  # VT
+import pandas as pd  # VT
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import asdict, dataclass
@@ -39,7 +41,7 @@ from lm_eval.api.registry import (
 from lm_eval.caching.cache import load_from_cache, save_to_cache
 from lm_eval.filters import build_filter_ensemble
 from lm_eval.prompts import get_prompt
-
+from miutils.file import list_to_txt_file # VT
 
 ALL_OUTPUT_TYPES = [
     "loglikelihood",
@@ -373,6 +375,7 @@ class Task(abc.ABC):
         world_size=None,
         cache_requests=False,
         rewrite_requests_cache=False,
+        idx_dir=""
     ) -> None:
         """Build a set of Instances for a task, and store them in task.instances"""
 
@@ -406,6 +409,20 @@ class Task(abc.ABC):
             and limit is not None
         ):
             limit = None
+
+        max_len = len(self.eval_docs)
+        if not limit or not idx_dir or max_len <= limit:
+            idx = []
+        else:
+            pi = f"{idx_dir}/idx_{self._config.task}_{limit}.txt"
+            if os.path.exists(pi):
+                print("> Using existing index for limit", limit)
+                idx = pd.read_csv(pi, header=None)[0].values
+            else:
+                idx = random.sample(range(0, max_len), limit)
+                list_to_txt_file(idx, pi)
+
+        self._idx = sorted(idx)
 
         doc_id_docs = list(
             self.doc_iterator(rank=rank, limit=limit, world_size=world_size)
@@ -653,15 +670,22 @@ class Task(abc.ABC):
             raise ValueError(
                 f"Task dataset (path={self.DATASET_PATH}, name={self.DATASET_NAME}) must have valid or test docs!"
             )
+    def enumerate_with_index(self, data, idx):
+        assert max(idx) <= len(data)
+        i = 0
+        for real_i, d in enumerate(data):
+            if real_i in idx:
+                yield i, d
+                i += 1
 
     def doc_iterator(
         self, *, rank: int = 0, limit: Union[int, None] = None, world_size: int = 1
     ) -> Iterator[Tuple[int, Any]]:
         limit = int(limit) if limit else None
         doc_iterator = utils.create_iterator(
-            enumerate(self.eval_docs),
+            enumerate(self.eval_docs) if not self._idx else self.enumerate_with_index(self.eval_docs, self._idx),
             rank=int(rank),
-            limit=limit,
+            limit=limit, # VT if using our idx this will have no effect
             world_size=int(world_size),
         )
         return doc_iterator

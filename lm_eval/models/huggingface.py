@@ -352,6 +352,7 @@ class HFLM(TemplateLM):
             eval_logger.info(
                 f"Loglikelihood prefix token id used in evaluation: {self.prefix_token_id}"
             )
+        self._extract_config = {}
 
     @property
     def config(self):
@@ -793,12 +794,20 @@ class HFLM(TemplateLM):
             if attn_mask is not None or labels is not None:
                 assert attn_mask is not None and labels is not None
                 assert self.AUTO_MODEL_CLASS == transformers.AutoModelForSeq2SeqLM
-                return self.model(
-                    input_ids=inps, attention_mask=attn_mask, labels=labels
-                ).logits
+                if "output_hidden_states" in kwargs and kwargs["output_hidden_states"]:
+                    return self.model(
+                        input_ids=inps, attention_mask=attn_mask, labels=labels, **kwargs
+                    )  # VT added kwargs .logits
+                else:
+                    return self.model(
+                        input_ids=inps, attention_mask=attn_mask, labels=labels
+                    ).logits
             else:
                 assert self.AUTO_MODEL_CLASS == transformers.AutoModelForCausalLM
-                return self.model(inps).logits
+                # VT
+                if "output_hidden_states" in kwargs and kwargs["output_hidden_states"]:
+                    return self.model(inps, **kwargs)
+                return self.model(inps).logits  # VT keep since seems to be eg also called for testing batch size, sp allow more performant version here
 
     def _model_generate(self, context, max_length, stop, **generation_kwargs):
         # temperature = 0.0 if not set
@@ -924,6 +933,17 @@ class HFLM(TemplateLM):
         print(f"Determined largest batch size: {self.batch_sizes[sched]}")
         return self.batch_sizes[sched]
 
+    # VT requests is list, per sample:
+    #  input in text (context, continuation), eg if called from loglikelihood: (Q, A given)
+    #  x encoded context
+    #  x encoded text
+    # for seq2seq, they keep input=context and cont extra, is give as extra label kwarg to model call
+    # so forward() output of decoder-only will also contain inp encoding, while seq2seq only contains cont (that's important for our indexing)
+    # !!! NOTE they give all but the last token to the model because they want the encodings of all continuation
+    #  ie inp is cut by 1 before given to the model
+    #  the logits are evaluated on all outputs, eg including white spaces (in code before it's made sure that context contains none or if they are added to continuation, in terms of the encoding) and all tokens of answer
+    #  so best use MC template w/ one token options if you want to have "clean" logits, ie w/o the potential confounders of how the model scores follow-up tokens (given the correct ones)
+    #  ALSO they evaluate by scoring true token probab in the context of all vocab probabs not just the answer options
     def _loglikelihood_tokens(
         self,
         requests: List[Tuple[Tuple[str, str], List[int], List[int]]],
@@ -1082,9 +1102,19 @@ class HFLM(TemplateLM):
                     "labels": batched_conts,
                 }
 
-            multi_logits = F.log_softmax(
-                self._model_call(batched_inps, **call_kwargs), dim=-1
-            )  # [batch, padding_length (inp or cont), vocab]
+            # VT orig code
+            # multi_logits = F.log_softmax(
+            #     self._model_call(batched_inps, **call_kwargs), dim=-1
+            # )  # [batch, padding_length (inp or cont), vocab]
+            # TODO might set that also according to extract func, in evaluator in model's extract config specify call kwargs to set
+            call_kwargs["output_hidden_states"] = True  # one could also set it in model config as they do; output_scores=True
+            outputs = self._model_call(batched_inps, **call_kwargs)
+
+            fn1 = self._extract_config["forward_batch"]
+            fn2 = self._extract_config["forward"]
+            batched_hidden_states = fn1(self.config, outputs)  # rename to batched_model_data or so?
+
+            multi_logits = F.log_softmax(outputs.logits, dim=-1)  # [batch, padding_length (inp or cont), vocab]
 
             for (request_str, ctx_tokens, _), logits, inplen, cont_toks in zip(
                 chunk, multi_logits, inplens, cont_toks_list
@@ -1100,11 +1130,16 @@ class HFLM(TemplateLM):
                     if self.AUTO_MODEL_CLASS == transformers.AutoModelForCausalLM
                     else None
                 )
+                # VT dim contlen (they call it seq) x vocab; note very first below is last from ctx since we gave the model one cont token less
                 logits = self._select_cont_toks(logits, contlen=contlen, inplen=ctx_len)
                 logits = logits.unsqueeze(0)  # [1, seq, vocab]
 
                 # Check if per-token argmax is exactly equal to continuation
                 greedy_tokens = logits.argmax(dim=-1)
+
+                # VT shape: (hidden_size,)
+                hidden_states = fn2(hidden_states, contlen=contlen, inplen=ctx_len, model_class=self.AUTO_MODEL_CLASS)
+                hidden_states = hidden_states.unsqueeze(0)  # [1, seq, vocab] seq is num_cont_tokens, but we shortened it to 1 here
 
                 # check for one-token continuation cache hits.
                 # noop in case group_by != "contexts" or no cache hit and returns the
@@ -1116,6 +1151,7 @@ class HFLM(TemplateLM):
                     cxt_toks=ctx_tokens,
                     cont_toks=cont_toks,
                     logits=logits,
+                    hidden=hidden_states  # VT
                 ):
                     cont_toks = torch.tensor(
                         cont_toks, dtype=torch.long, device=self.device
@@ -1128,8 +1164,9 @@ class HFLM(TemplateLM):
                         -1
                     )  # [1, seq]
 
+                    #  # VT the sum seems to also consider more continuation tokens if we have them
                     # Answer: (log prob, is-exact-match)
-                    answer = (float(logits.sum()), bool(max_equal))
+                    answer = (float(logits.sum()), bool(max_equal), hidden_states)
 
                     res.append(answer)
 
@@ -1253,8 +1290,19 @@ class HFLM(TemplateLM):
                 **kwargs,
             )
 
-            cont_toks_list = cont.tolist()
-            for cont_toks, context in zip(cont_toks_list, contexts):
+            # make sure our assumption of not doing sampling applies
+            # NOTE even if we do sampling, the very first generated next token should still be the same,
+            # for follow-up there might be different ones, ie we may have >1 entries, but all should be the same
+            # shouldn't ignore assertion, even as long as we focus on first generated token
+            # since extract code extracts all and hence doesn't restrict to one sample per input
+            # we consider exemplary generated token 0 and layer -1
+            dec_hidden_label = "decoder_hidden_states" if "decoder_hidden_states" in cont else "hidden_states"
+            assert cont[dec_hidden_label][0][-1].shape[0] == batch_size
+
+            hidden = self._extract_config["generate"](self.config, cont)
+
+            cont_toks_list = cont.sequences.tolist()  # VT
+            for i, (cont_toks, context) in enumerate(zip(cont_toks_list, contexts)):
                 # discard context + left-padding toks if using causal decoder-only LM
                 if self.AUTO_MODEL_CLASS == transformers.AutoModelForCausalLM:
                     cont_toks = cont_toks[context_enc.shape[1] :]
@@ -1268,7 +1316,7 @@ class HFLM(TemplateLM):
                         # for seq2seq case where self.tok_decode(self.eot_token_id) = ''
                         s = s.split(term)[0]
 
-                res.append(s)
+                res.append((s, hidden[i]))  # VT changed format
 
                 self.cache_hook.add_partial("generate_until", (context, gen_kwargs), s)
                 pbar.update(1)

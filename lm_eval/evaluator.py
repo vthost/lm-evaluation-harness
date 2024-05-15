@@ -1,4 +1,5 @@
 import itertools
+import importlib  # VT
 import json
 import logging
 import random
@@ -63,6 +64,8 @@ def simple_evaluate(
     numpy_random_seed: int = 1234,
     torch_random_seed: int = 1234,
     fewshot_random_seed: int = 1234,
+    extract_id: str = "extract_hidden",  # VT id for methods what model artifacts to extract, see extract.py
+    idx_dir: str = ""
 ):
     """Instantiate and evaluate a model on a list of tasks.
 
@@ -116,6 +119,8 @@ def simple_evaluate(
     :return
         Dictionary of results
     """
+    assert model == "hf"  # VT we only adapted for that
+
     eval_logger.setLevel(getattr(logging, f"{verbosity}"))
     start_date = time.time()
 
@@ -204,6 +209,18 @@ def simple_evaluate(
             + ".db",
         )
 
+    # VT add our extraction capabilities to the LM
+    def resolve_function(spec):  # todo could try globals().get(f"{...}") or something nicer
+        assert "." in spec
+        mod = importlib.import_module(spec[:spec.rindex('.')])
+        fun = getattr(mod, spec[spec.rindex('.') + 1:])
+        return fun
+
+    if not getattr(lm.config, "num_hidden_layers", None):  # somehow cannot use as a dict
+        print("!! WARNING found no num_hidden_layers")  # may be critical if we need it for extraction
+    for mid in ["generate", "forward_batch", "forward"]:
+        lm._extract_config[mid] = resolve_function(f"lm_eval.extract.{extract_id}_{mid}")
+
     if task_manager is None:
         task_manager = TaskManager(verbosity)
 
@@ -217,6 +234,10 @@ def simple_evaluate(
 
         if task_obj.get_config("output_type") == "generate_until":
             if gen_kwargs is not None:
+                # VT
+                for k in gen_kwargs:
+                    if k in task_obj.config["generation_kwargs"] and task_obj.config["generation_kwargs"][k] != gen_kwargs[k]:
+                        print("OVERRIDING gen_kwarg old/new:", k, task_obj.config["generation_kwargs"][k], gen_kwargs[k])
                 task_obj.set_config(
                     key="generation_kwargs", value=gen_kwargs, update=True
                 )
@@ -263,6 +284,7 @@ def simple_evaluate(
         write_out=write_out,
         log_samples=log_samples,
         verbosity=verbosity,
+        idx_dir=idx_dir  # VT
     )
 
     if lm.rank == 0:
@@ -318,6 +340,7 @@ def evaluate(
     write_out: bool = False,
     log_samples: bool = True,
     verbosity: str = "INFO",
+    idx_dir: str = None
 ):
     """Instantiate and evaluate a model on a list of tasks.
 
@@ -355,6 +378,10 @@ def evaluate(
             raise ValueError("log_samples must be True for 'bypass' metric-only tasks")
     for task_output in eval_tasks:
         task: Task = task_output.task
+        # VT
+        assert task.OUTPUT_TYPE in ["multiple_choice", "generate_until", "loglikelihood"] #, "loglikelihood_rolling"]
+        assert task.config.repeats == 1  # otherwise unclear how to extract hidden
+
         limit = get_sample_size(task, limit)
         task.build_all_requests(
             limit=limit,
@@ -362,6 +389,7 @@ def evaluate(
             world_size=lm.world_size,
             cache_requests=cache_requests,
             rewrite_requests_cache=rewrite_requests_cache,
+            idx_dir = idx_dir  # VT added
         )
         eval_logger.debug(
             f"Task: {task_output.task_name}; number of requests on this rank: {len(task.instances)}"
@@ -378,6 +406,7 @@ def evaluate(
             gathered_item = (
                 lm.accelerator.gather(instances_rnk).cpu().detach().numpy().tolist()
             )
+
             # "multiple_choice" task types dispatch (several) "loglikelihood" request types
             reqtype = (
                 "loglikelihood"
@@ -407,7 +436,11 @@ def evaluate(
 
         # put responses from model into a list of length K for each request.
         for x, req in zip(resps, cloned_reqs):
-            req.resps.append(x)
+            # req.resps.append(x) # VT WE ADDED HIDDEN HERE AS ADD ENTRY
+            req.resps.append(x[0] if reqtype == "generate_until" else x if reqtype == "loglikelihood_rolling" else x[:-1] )
+            if reqtype != "loglikelihood_rolling":
+                req.hidden.append(x[-1])  # VT (also above [:-1])
+
 
         if lm.world_size > 1:
             lm.accelerator.wait_for_everyone()
@@ -437,6 +470,16 @@ def evaluate(
             )
             for doc_id, doc in doc_iterator:
                 requests = instances_by_doc_id[doc_id]
+                # VT our assumption how we extract hidden per doc id, we use very first req:
+                # this might hold anyway if task's repeats is 1 but just to make sure...
+                if task.OUTPUT_TYPE != "multiple_choice":
+                    assert len(requests) == 1
+                # doesn't work "choices" is a dict of other structure sometimes
+                # elif "choices" in doc:  # TODO ok this seems to be maintained, these are totally task-specific/random and not exhaustive, would need to generalize accroding to fw parsing code
+                #     pass #assert len(requests) == len(doc["choices"])
+                elif "multiple_choice_targets" in doc:
+                    assert len(requests) == len(doc["multiple_choice_targets"])
+
                 metrics = task.process_results(
                     doc, [req.filtered_resps[filter_key] for req in requests]
                 )
@@ -466,6 +509,12 @@ def evaluate(
                     task_output.logged_samples.append(example)
                 for metric, value in metrics.items():
                     task_output.sample_metrics[(metric, filter_key)].append(value)
+
+                # VT added own field to task output
+                # they have one for samples, one for metrics, if we kept hidden w/ each sample would be harder to extract later
+                # they similarly keep metrics also separate
+                hs = requests[0].hidden[0]  # [-1]  #filtered_resps[filter_key][-1]  # one element [last item from result tuple] for each MC option TODO we might adapt cache for mc to just give out one but not sure if we need all later
+                task_output.hidden += [hs]
 
     if WORLD_SIZE > 1:
         # if multigpu, then gather data across all ranks to rank 0
@@ -503,7 +552,7 @@ def evaluate(
         # aggregate results ; run bootstrap CIs
         for task_output in eval_tasks:
             task_output.calculate_aggregate_metric(bootstrap_iters=bootstrap_iters)
-        results, samples, configs, versions, num_fewshot = consolidate_results(
+        results, samples, configs, versions, num_fewshot, hidden = consolidate_results(
             eval_tasks
         )
 
@@ -604,6 +653,7 @@ def evaluate(
         }
         if log_samples:
             results_dict["samples"] = dict(samples)
+            results_dict["hidden"] = dict(hidden)
 
         return results_dict
 

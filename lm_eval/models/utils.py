@@ -436,6 +436,8 @@ class Collator:
         cxt_toks: List[int] = None,
         cont_toks: List[int] = None,
         logits: torch.Tensor = None,
+        # VT added, this method seems to be only used in log_likel tokens w/ "context" if it's causalLM
+        hidden: torch.Tensor = None,
     ) -> Iterator[Tuple[Tuple[str, str], List[int], torch.Tensor]]:
         """
         Retrieves cached single-token continuations and their associated arguments, updating indices as necessary.
@@ -478,19 +480,22 @@ class Collator:
             ] = self._arr_with_indices.pop(tuple(cxt_toks + cont_toks[:-1]))
             if (cache_size := len(cache_hit)) == 1:
                 self._reorder_indices.extend(x[0] for x in cache_hit)
-                yield req_str, cont_toks, logits
+                yield req_str, cont_toks, logits, hidden
             else:
                 # If we have matching requests then expand the batch dimension (no-op) and
                 # yield each along with its corresponding args.
                 multilogits = logits.expand(cache_size, -1, -1).chunk(cache_size)
+                # creates a tuple with orig tensor in each component, VT this is a bit bad for memory...
+                multihidden = hidden.expand(cache_size, -1, -1).chunk(cache_size) # VT this else case is because in MC we might have one-token continuations and they apply model per continuation which all would result in same i/o, so apply only once and update others coming thereafter
+
                 indices, req_str, cont_toks = zip(
                     *[(x[0], x[1][0], x[-1][-1]) for x in cache_hit]
                 )
                 self._reorder_indices.extend(indices)
-                for c_key, cont_tok, logit in zip(req_str, cont_toks, multilogits):
-                    yield c_key, cont_tok, logit
+                for c_key, cont_tok, logit, hidden in zip(req_str, cont_toks, multilogits, multihidden):
+                    yield c_key, cont_tok, logit, hidden
         else:
-            yield req_str, cont_toks, logits
+            yield req_str, cont_toks, logits, hidden
 
     def _reorder(self, arr: Union[List, Tuple[Tuple[int, Any], ...]]) -> Iterator:
         """

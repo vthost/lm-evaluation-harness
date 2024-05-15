@@ -60,6 +60,7 @@ class TaskOutput:
         self.sample_len = None
         self.sample_metrics = collections.defaultdict(list)
         self.agg_metrics = collections.defaultdict(list)
+        self.hidden = []
 
     @classmethod
     def from_taskdict(cls, task_name: str, task):
@@ -219,7 +220,7 @@ def prepare_print_tasks(
 
 def consolidate_results(
     eval_tasks: List[TaskOutput],
-) -> Tuple[dict, dict, dict, dict, dict]:
+) -> Tuple[dict, dict, dict, dict, dict, dict]:  # VT added dict
     """
     @param eval_tasks: list(TaskOutput).
     @return: A tuple containing the consolidated results, samples, configs, versions, and num_fewshot.
@@ -243,6 +244,7 @@ def consolidate_results(
     results = collections.defaultdict(dict)
     # logs info about each document evaluated.
     samples = collections.defaultdict(list)
+    hidden = collections.defaultdict(list)  # VT
     # store num-fewshot value per task
     num_fewshot = collections.defaultdict(int)
     # Tracks the YAML configs of all chosen task
@@ -268,7 +270,8 @@ def consolidate_results(
             results[task_output.task_name][
                 f"{metric}_stderr,{filter_key}"
             ] = task_output.agg_metrics[f"{metric}_stderr,{filter_key}"]
-    return results, samples, configs, versions, num_fewshot
+        hidden[task_output.task_name] = task_output.hidden
+    return results, samples, configs, versions, num_fewshot, hidden
 
 
 @positional_deprecated
