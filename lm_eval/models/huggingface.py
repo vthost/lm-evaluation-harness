@@ -775,7 +775,7 @@ class HFLM(TemplateLM):
     def tok_decode(self, tokens, skip_special_tokens=True):
         return self.tokenizer.decode(tokens, skip_special_tokens=skip_special_tokens)
 
-    def _model_call(self, inps, attn_mask=None, labels=None):
+    def _model_call(self, inps, attn_mask=None, labels=None, **kwargs):
         """
         :param inps: torch.Tensor
             A torch tensor of shape [batch, (sequence_ctx + sequence_cont)] or of shape
@@ -1116,8 +1116,8 @@ class HFLM(TemplateLM):
 
             multi_logits = F.log_softmax(outputs.logits, dim=-1)  # [batch, padding_length (inp or cont), vocab]
 
-            for (request_str, ctx_tokens, _), logits, inplen, cont_toks in zip(
-                chunk, multi_logits, inplens, cont_toks_list
+            for (request_str, ctx_tokens, _), logits, inplen, cont_toks, hidden_states in zip(
+                chunk, multi_logits, inplens, cont_toks_list, batched_hidden_states
             ):
                 # Slice to original seq length
                 contlen = len(cont_toks)
@@ -1146,7 +1146,7 @@ class HFLM(TemplateLM):
                 # original args. Otherwise, expands the logits batch dimension and yields each
                 # batch along with matching continuation tokens and prompt strings.
                 # logits -> [1, seq, vocab]
-                for request_str, cont_toks, logits in re_ord.get_cache(
+                for request_str, cont_toks, logits, hidden_states in re_ord.get_cache(
                     req_str=request_str,
                     cxt_toks=ctx_tokens,
                     cont_toks=cont_toks,
