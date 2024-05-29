@@ -1,0 +1,6 @@
+group: mi_mmlu_test
+task:
+  - mmlu_stem_test
+  - mmlu_other_test
+  - mmlu_social_sciences_test
+  - mmlu_humanities_test

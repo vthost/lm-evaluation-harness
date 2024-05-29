@@ -1,7 +1,6 @@
-group: mmlu
+group: mi_mmlu  # missing orig's mmlu datasets which we use as test sets
 task:
   - mmlu_stem
   - mmlu_other
   - mmlu_social_sciences
   - mmlu_humanities
-  - mi_mmlu_test
