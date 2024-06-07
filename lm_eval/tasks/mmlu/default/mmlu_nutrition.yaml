@@ -1,7 +1,7 @@
 "dataset_name": "nutrition"
 "description": "The following are multiple choice questions (with answers) about nutrition.\n\
   \n"
-"group": "mmlu_other"
+"group": ["mmlu_other", "mmlu_other1"]
 "group_alias": "other"
 "include": "_default_template_yaml"
 "task": "mmlu_nutrition"
