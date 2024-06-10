@@ -1316,7 +1316,7 @@ class HFLM(TemplateLM):
                         # for seq2seq case where self.tok_decode(self.eot_token_id) = ''
                         s = s.split(term)[0]
 
-                res.append((s, hidden[i]))  # VT changed format
+                res.append((s, hidden[i].unsqueeze(0)))  # VT changed format for adding hidden, unsqueeze to have it same as MC format
 
                 self.cache_hook.add_partial("generate_until", (context, gen_kwargs), s)
                 pbar.update(1)
