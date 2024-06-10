@@ -486,7 +486,8 @@ class Collator:
                 # yield each along with its corresponding args.
                 multilogits = logits.expand(cache_size, -1, -1).chunk(cache_size)
                 # creates a tuple with orig tensor in each component, VT this is a bit bad for memory...
-                multihidden = hidden.expand(cache_size, -1, -1).chunk(cache_size) # VT this else case is because in MC we might have one-token continuations and they apply model per continuation which all would result in same i/o, so apply only once and update others coming thereafter
+                dim = [-1]*(len(hidden.shape)-1) # for batch dim we use cache size
+                multihidden = hidden.expand(cache_size, *dim).chunk(cache_size) # VT this else case is because in MC we might have one-token continuations and they apply model per continuation which all would result in same i/o, so apply only once and update others coming thereafter
 
                 indices, req_str, cont_toks = zip(
                     *[(x[0], x[1][0], x[-1][-1]) for x in cache_hit]
