@@ -11,7 +11,7 @@ task:
     num_fewshot: 10
   - task: truthfulqa
     num_fewshot: 0
-  - task: mi-mmlu1
+  - task: mi_mmlu1
     num_fewshot: 5
   - task: winogrande
     fewshot_split: train
