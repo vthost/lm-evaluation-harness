@@ -374,7 +374,7 @@ for example in `mmlu_abstract_algebra.yaml` we set `group_alias` to `stem` and `
 "dataset_name": "abstract_algebra"
 "description": "The following are multiple choice questions (with answers) about abstract\
   \ algebra.\n\n"
-"group": "mmlu_stem"
+"group": ["mmlu_stem", "mmlu_stem0"]
 "group_alias": "stem"
 "include": "_default_template_yaml"
 "task": "mmlu_abstract_algebra"

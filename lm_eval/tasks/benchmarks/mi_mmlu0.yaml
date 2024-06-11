@@ -1,0 +1,6 @@
+group: mi_mmlu0
+task:
+  - mmlu_stem0
+  - mmlu_other0
+  - mmlu_social_sciences0
+  - mmlu_humanities0

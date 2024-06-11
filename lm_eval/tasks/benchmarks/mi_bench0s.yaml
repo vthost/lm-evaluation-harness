@@ -1,0 +1,20 @@
+group: mi_bench0s
+group_alias: Open LLM Leaderboard
+task:
+  - task: sst2
+    num_fewshot: 5
+  - task: arc_challenge
+    fewshot_split: validation
+    num_fewshot: 25
+  - task: hellaswag
+    fewshot_split: train
+    num_fewshot: 10
+  - task: truthfulqa
+    num_fewshot: 0
+  - task: mi_mmlu0s
+    num_fewshot: 5
+  - task: winogrande
+    fewshot_split: train
+    num_fewshot: 5
+  - task: gsm8k
+    num_fewshot: 5
