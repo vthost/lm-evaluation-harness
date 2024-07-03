@@ -21,7 +21,7 @@ task:
     num_fewshot: 5
   - task: hellaswag
     num_fewshot: 5
-  - task: arc
+  - task: arc_challenge
     num_fewshot: 5
   - task: agieval_en   #  TODO dropping curr chinese ones not sure if in line with mixeval (also poss agieval_nous is eng subset of MC questions)
     num_fewshot: 5
