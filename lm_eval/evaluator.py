@@ -225,6 +225,7 @@ def simple_evaluate(
         task_manager = TaskManager(verbosity)
 
     task_dict = get_task_dict(tasks, task_manager)
+
     for task_name in task_dict.keys():
         task_obj = task_dict[task_name]
         if isinstance(task_obj, tuple):

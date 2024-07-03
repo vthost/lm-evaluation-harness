@@ -1,0 +1,9 @@
+group: mi_test
+group_alias: Open LLM Leaderboard
+# VT to test 3 different datasets, one very simple, where we should get good scores
+# and two varied tasks
+task:
+  - task: sst2
+    num_fewshot: 5
+  - task: bigbench_bbq_lite_json_multiple_choice
+  - task: bigbench_abstract_narrative_understanding_generate_until

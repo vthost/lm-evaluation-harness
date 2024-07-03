@@ -1,0 +1,46 @@
+group: mixeval
+group_alias: mixeval
+# VT the datasets mentioned in the paper
+# • General-domain benchmarks:
+#  MMLU (Hendrycks et al., 2020), BoolQ (Clark et al., 2019), HellaSwag (Zellers et al., 2019),
+#  ARC (Clark et al., 2018), AGIEval (Zhong et al., 2023), OpenbookQA (Mihaylov et al., 2018),
+#  GPQA (Rein et al., 2023), WinoGrande (Sakaguchi et al., 2021), TriviaQA (Joshi et al., 2017),
+#  DROP (Dua et al., 2019), and BBH (Suzgun et al., 2022).,
+# • Domain-specific benchmarks:
+#  Math: GSM8K (Rein et al., 2023) and Physics: PIQA (Bisk et al., 2020);
+# • VT - We're missing CommonSenseQA (Talmor et al., 2018), MATH (Hendrycks et al., 2021);
+#  Coding: MBPP (Austin et al., 2021) and HumanEval (Chen et al., 2021);
+#  and Social Interactions: SIQA (Sap et al., 2019).
+# • paper says:
+#  Chat models employ official chat templates or FastChat chat templates (Zheng et al., 2024),
+#  and base models are evaluated in a 5-shot setting
+task:
+  - task: mmlu
+    num_fewshot: 5
+  - task: boolq
+    num_fewshot: 5
+  - task: hellaswag
+    num_fewshot: 5
+  - task: arc
+    num_fewshot: 5
+  - task: agieval_en   #  TODO dropping curr chinese ones not sure if in line with mixeval (also poss agieval_nous is eng subset of MC questions)
+    num_fewshot: 5
+  - task: openbookqa
+    num_fewshot: 5
+#  - task: gpqa
+#    num_fewshot: 5
+  - task: winogrande
+    num_fewshot: 5
+  - task: triviaqa
+    num_fewshot: 5
+  - task: drop
+    num_fewshot: 5
+#  - task: bbh
+#    num_fewshot: 5
+  - task: gsm8k
+    num_fewshot: 5
+  - task: piqa
+    num_fewshot: 5
+
+
+
