@@ -148,7 +148,7 @@ class TaskManager:
         update_config: Optional[dict] = None,
         yaml_path: Optional[str] = None,
     ) -> Mapping:
-        def load_task(config, task, group=None, yaml_path=None):
+        def load_task(config, task, group=xNone, yaml_path=None):
             if "include" in config:
                 if yaml_path is None:
                     raise ValueError
