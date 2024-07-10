@@ -184,10 +184,45 @@ class IBMGenAILMEval(LM):
         if all(token.logprob is None for token in input_tokens):
             raise RuntimeError(f"Model {self._model_id} is not supported: does not return logprobs for input tokens")
 
+    # VT adapted from https://ibm.github.io/ibm-generative-ai/main/_modules/genai/extensions/lm_eval/model.html
+    def _check_last_token_is_stop_token(self, response_tokens: list[str], context_tokens: list[str]) -> bool:
+        """
+        Check whether tokens from context and response are the same.
+        Only last token can differ, in case or stop sequence (</s>)
+
+        Returns:
+            True if only last token differs, False if all tokens are the same
+        Raises: VT NOT ANYMORE TODO check loglikelihood in lmeval
+            RuntimeError: if some other tokens differ than the last one
+            RuntimeError: if last token differs but context token is substring of response token.
+                Loglikelihood of second part of token is not defined
+
+        """
+        context_length = len(context_tokens)
+        # if response_tokens[: context_length - 1] != context_tokens[: context_length - 1]:
+        #     raise RuntimeError(
+        #         f"There is an unexpected difference between tokenizer and model tokens:\n"
+        #         f"context_tokens={context_tokens}\n"
+        #         f"response_tokens={response_tokens[:context_length]}"
+        #     )
+
+        last_context_token = context_tokens[context_length - 1]
+        last_context_token_resp = response_tokens[context_length - 1]
+        # if last_context_token != last_context_token_resp and last_context_token_resp.startswith(last_context_token):
+        #     raise RuntimeError(
+        #         f"The context sent to loglikelihood evaluation ends with a token ({last_context_token}) "
+        #         f"that is substring of the continuation token ({last_context_token_resp}).\n"
+        #         f"context_tokens={context_tokens}\n"
+        #         f"response_tokens={response_tokens[:context_length]}\n"
+        #         "This is not allowed as it would skew the results. Please check your data."
+        #     )
+        return last_context_token != last_context_token_resp
+
     def _get_log_likelihood(self, input_tokens: list[BaseTokens], context_tokens: list[str]) -> LogLikelihoodResult:
         response_tokens: list[str] = [token.text for token in input_tokens]
         context_length = len(context_tokens)
 
+        # VT added custom version above since got 2nd runtime error TODO
         if self._check_last_token_is_stop_token(response_tokens, context_tokens):
             context_length -= 1
 
@@ -329,7 +364,7 @@ class IBMGenAILMEval(LM):
             parameters = TextGenerationParameters.model_validate(
                 {
                     **self._parameters.model_dump(),
-                    "decoding_method": DecodingMethod.GREEDY if not do_sample else DecodingMethod.SAMPLE,
+                    "decoding_method": decoding_method,
                     "stop_sequences": stop_sequences,
                     "temperature": temperature,
                     "max_new_tokens": max_new_tokens,
