@@ -385,11 +385,23 @@ class IBMGenAILMEval(LM):
             #     }
             # )
 
-            for response in self._client.text.generation.create(
-                model_id=self._model_id, inputs=inputs, parameters=parameters
-            ):
-                results[key].extend((result.generated_text, None) for result in response.results)  # VT adding dummydata
-                pb.update(len(response.results))
+            for inp in inputs:
+                nt, done = 10, 0
+                while nt > 0 and not done:
+                    nt -= 1
+                    try:
+                        for response in self._client.text.generation.create(
+                            model_id=self._model_id, inputs=[inp], parameters=parameters
+                        ):
+                            results[key].extend((result.generated_text, None) for result in response.results)  # VT adding dummydata
+                            pb.update(len(response.results))
+                            done = 1
+
+                    except Exception as e:
+                        print("BAM EXCEPTION")
+                        print(e)
+                        if nt == 0:
+                            results[key].extend(("", None))
 
         pb.close()
 
