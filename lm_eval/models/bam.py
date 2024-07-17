@@ -185,7 +185,7 @@ class IBMGenAILMEval(LM):
             raise RuntimeError(f"Model {self._model_id} is not supported: does not return logprobs for input tokens")
 
     # VT adapted from https://ibm.github.io/ibm-generative-ai/main/_modules/genai/extensions/lm_eval/model.html
-    def _check_last_token_is_stop_token(self, response_tokens: list[str], context_tokens: list[str]) -> bool:
+    def _check_last_token_is_ystop_token(self, response_tokens: list[str], context_tokens: list[str]) -> bool:
         """
         Check whether tokens from context and response are the same.
         Only last token can differ, in case or stop sequence (</s>)
