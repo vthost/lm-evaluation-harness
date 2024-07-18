@@ -271,18 +271,41 @@ class IBMGenAILMEval(LM):
             total=len(contexts_tokenized),
             disable=not self._show_progressbar,
         )
-        for response, context_tokens in zip(
-            self._client.text.generation.create(
-                model_id=self._model_id,
-                inputs=generation_inputs,
-                parameters=self._log_likelihood_parameters,
-                execution_options=self._generation_execution_options,
-            ),
-            contexts_tokenized,
-        ):
-            pb.update(len(response.results))
-            for result in response.results:
-                results.append(self._get_log_likelihood(result.input_tokens, context_tokens))
+
+        for inp, context_tokens in zip(generation_inputs, contexts_tokenized):
+            nt, done = 10, 0
+            while nt > 0 and not done:
+                nt -= 1
+                try:
+                    for response in self._client.text.generation.create(
+                            model_id=self._model_id, inputs=[inp], parameters=self._log_likelihood_parameters,
+                            execution_options=self._generation_execution_options,
+                    ):
+                        assert len(response.results) == 1  # VT
+                        pb.update(len(response.results))
+                        for result in response.results:
+                            results.append(self._get_log_likelihood(result.input_tokens, context_tokens))
+
+                        done = 1
+
+                except Exception as e:
+                    print("BAM EXCEPTION", nt)
+                    print(e)
+                    if nt == 0:
+                        results.append((0, False, None))
+
+        # for response, context_tokens in zip(
+        #     self._client.text.generation.create(
+        #         model_id=self._model_id,
+        #         inputs=generation_inputs,
+        #         parameters=self._log_likelihood_parameters,
+        #         execution_options=self._generation_execution_options,
+        #     ),
+        #     contexts_tokenized,
+        # ):
+        #     pb.update(len(response.results))
+        #     for result in response.results:
+        #         results.append(self._get_log_likelihood(result.input_tokens, context_tokens))
         pb.close()
         return cast(list[tuple[float, bool, Any]], results)
 
@@ -393,12 +416,13 @@ class IBMGenAILMEval(LM):
                         for response in self._client.text.generation.create(
                             model_id=self._model_id, inputs=[inp], parameters=parameters
                         ):
+                            assert len(response.results) == 1
                             results[key].extend((result.generated_text, None) for result in response.results)  # VT adding dummydata
                             pb.update(len(response.results))
                             done = 1
 
                     except Exception as e:
-                        print("BAM EXCEPTION")
+                        print("BAM EXCEPTION", nt)
                         print(e)
                         if nt == 0:
                             results[key].extend(("", None))
