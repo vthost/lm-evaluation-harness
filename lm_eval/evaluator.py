@@ -510,11 +510,12 @@ def evaluate(
         for instances in instances_by_doc_id.values():
             instances.sort(key=lambda x: x.idx)
         # iterate over different filters used
-        for filter_key in task.instances[0].filtered_resps.keys():
+        for i_filter, filter_key in enumerate(task.instances[0].filtered_resps.keys()):
             doc_iterator = task.doc_iterator(
                 rank=RANK, limit=limit, world_size=WORLD_SIZE
             )
             for doc_id, doc in doc_iterator:
+                # print(doc_id)
                 requests = instances_by_doc_id[doc_id]
                 # VT our assumption how we extract hidden per doc id, we use very first req:
                 # this might hold anyway if task's repeats is 1 but just to make sure...
@@ -529,7 +530,7 @@ def evaluate(
                 metrics = task.process_results(
                     doc, [req.filtered_resps[filter_key] for req in requests]
                 )
-                if log_samples:
+                if log_samples: # VT this is only for output, need to add filter key
                     target = task.doc_to_target(doc)
                     example = {
                         "doc_id": doc_id,
@@ -537,6 +538,7 @@ def evaluate(
                         "target": target,
                         "arguments": [req.args for req in requests],
                         "resps": [req.resps for req in requests],
+                        "filter_key": filter_key,
                         "filtered_resps": [
                             req.filtered_resps[filter_key] for req in requests
                         ],
@@ -556,11 +558,12 @@ def evaluate(
                 for metric, value in metrics.items():
                     task_output.sample_metrics[(metric, filter_key)].append(value)
 
-                # VT added own field to task output
-                # they have one for samples, one for metrics, if we kept hidden w/ each sample would be harder to extract later
-                # they similarly keep metrics also separate
-                hs = requests[0].hidden[0]  # [-1]  #filtered_resps[filter_key][-1]  # one element [last item from result tuple] for each MC option TODO we might adapt cache for mc to just give out one but not sure if we need all later
-                task_output.hidden += [hs]
+                if not i_filter:  # VT hidden don't change with filter!
+                    # VT added own field to task output
+                    # they have one for samples, one for metrics, if we kept hidden w/ each sample would be harder to extract later
+                    # they similarly keep metrics also separate
+                    hs = requests[0].hidden[0]  # [-1]  #filtered_resps[filter_key][-1]  # one element [last item from result tuple] for each MC option TODO we might adapt cache for mc to just give out one but not sure if we need all later
+                    task_output.hidden += [hs]
 
     if WORLD_SIZE > 1:
         # if multigpu, then gather data across all ranks to rank 0
