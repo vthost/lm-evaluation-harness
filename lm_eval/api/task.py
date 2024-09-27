@@ -938,6 +938,10 @@ class ConfigurableTask(Task):
                     )
 
     def download(self, dataset_kwargs: Optional[Dict[str, Any]] = None) -> None:
+        if dataset_kwargs:  # VT somehow the global setting according to the main parameters is ignored
+            dataset_kwargs["trust_remote_code"] = True
+        else:
+            dataset_kwargs = {"trust_remote_code": True}
         self.dataset = datasets.load_dataset(
             path=self.DATASET_PATH,
             name=self.DATASET_NAME,
