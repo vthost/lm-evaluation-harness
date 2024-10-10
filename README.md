@@ -3,6 +3,8 @@ pip install python-dotenv ibm-generative-ai editdistance fire matplotlib
 
 also add environment variable BAM_GENAI_KEY
 
+NOTE logits in mc are the top ones given correct answer prev token, not necess of given correct answer
+
 # Language Model Evaluation Harness
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.10256836.svg)](https://doi.org/10.5281/zenodo.10256836)

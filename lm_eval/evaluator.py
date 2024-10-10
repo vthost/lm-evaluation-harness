@@ -131,7 +131,7 @@ def simple_evaluate(
         Dictionary of results
     """
     # assert model == "hf"  # VT we only adapted for that
-    assert model in ["hf", "bam"]
+    assert model in ["hf"] #, "bam"] didn't update BAM code later...
 
     eval_logger.setLevel(getattr(logging, f"{verbosity}"))
     start_date = time.time()
@@ -483,10 +483,10 @@ def evaluate(
         # put responses from model into a list of length K for each request.
         for x, req in zip(resps, cloned_reqs):
             # req.resps.append(x) # VT WE ADDED HIDDEN HERE AS ADD ENTRY
-            req.resps.append(x[0] if reqtype == "generate_until" else x if reqtype == "loglikelihood_rolling" else x[:-1] )
+            req.resps.append(x[0] if reqtype == "generate_until"
+                             else x if reqtype == "loglikelihood_rolling" else x[:-1] )
             if reqtype != "loglikelihood_rolling":
-                req.hidden.append(x[-1])  # VT (also above [:-1])
-
+                req.hidden.append(x[-1])  # VT we've put our data into tuples -1 position (also above [:-1])
 
         if lm.world_size > 1:
             lm.accelerator.wait_for_everyone()
@@ -558,11 +558,40 @@ def evaluate(
                 for metric, value in metrics.items():
                     task_output.sample_metrics[(metric, filter_key)].append(value)
 
-                if not i_filter:  # VT hidden don't change with filter!
+                # TODO NOTE hidden of last token don't change,
+                #  BUT if we consider multiple choice logits for subsequent do change
+                if not i_filter:  # VT hidden don't change with filter! so we just consider them once, not for all filters
                     # VT added own field to task output
-                    # they have one for samples, one for metrics, if we kept hidden w/ each sample would be harder to extract later
-                    # they similarly keep metrics also separate
-                    hs = requests[0].hidden[0]  # [-1]  #filtered_resps[filter_key][-1]  # one element [last item from result tuple] for each MC option TODO we might adapt cache for mc to just give out one but not sure if we need all later
+                    # they have one for samples, one for metrics,
+                    # if we kept hidden w/ each sample would be harder to extract later
+                    # and they similarly keep metrics also separate
+                    if task.OUTPUT_TYPE != "multiple_choice":
+                        target_idx = 0  # VT we only have one request per sample
+                    elif isinstance(target, int):
+                        target_idx = target
+                    elif hasattr(task, "doc_to_text") and isinstance(task.doc_to_text(doc), int):
+                        assert "winogrande" in task.config.dataset_name  # VT assumes this info is available
+                        target_idx = task.doc_to_text(doc)  # VT TODO seems to be correct for winogrande not sure about rest
+                    elif hasattr(task, "doc_to_choice"):  # TODO VT assume choices order corresponds to the ones in requests
+                        choices = task.doc_to_choice(doc)
+                        target_idx = choices.index(target)
+                    else:
+                        assert False
+                        target_idx = 0  # task.doc_to_choice(target)
+
+                    hs = requests[target_idx].hidden[0]  # [-1]  #filtered_resps[filter_key][-1]  # one element [last item from result tuple] for each MC option
+                    # here we can extract anything special to MC
+                    #  eg top-1 logit for all choices, then add to hs tuple...
+                    if task.OUTPUT_TYPE == "multiple_choice":
+                        # not just hs, the resps they have are sums over continuation tokens
+                        # (sec tuple component is 1 if answer is exact match else 0, we ignore it),
+                        # may be single letters in MC
+                        req_resps = []
+                        for r in requests:
+                            assert len(r.resps) == 1
+                            req_resps += [r.resps[0][0]]  # first resp, loglikel.
+                        hs += (req_resps,)
+
                     task_output.hidden += [hs]
 
     if WORLD_SIZE > 1:

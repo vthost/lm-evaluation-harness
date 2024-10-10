@@ -1112,12 +1112,12 @@ class HFLM(TemplateLM):
 
             fn1 = self._extract_config["forward_batch"]
             fn2 = self._extract_config["forward"]
-            batched_hidden_states = fn1(self.config, outputs)  # rename to batched_model_data or so?
+            batched_model_data = fn1(self.config, outputs)  # rename to batched_model_data or so?
 
             multi_logits = F.log_softmax(outputs.logits, dim=-1)  # [batch, padding_length (inp or cont), vocab]
 
             for (request_str, ctx_tokens, _), logits, inplen, cont_toks, hidden_states in zip(
-                chunk, multi_logits, inplens, cont_toks_list, batched_hidden_states
+                chunk, multi_logits, inplens, cont_toks_list, batched_model_data  # usse *batched_model_data here and w/ hidden above if b
             ):
                 # Slice to original seq length
                 contlen = len(cont_toks)
@@ -1137,9 +1137,9 @@ class HFLM(TemplateLM):
                 # Check if per-token argmax is exactly equal to continuation
                 greedy_tokens = logits.argmax(dim=-1)
 
-                # VT shape: (hidden_size,)
+                # VT shape: (hidden_size,) todo isn't always the case it seems double check
                 hidden_states = fn2(hidden_states, contlen=contlen, inplen=ctx_len, model_class=self.AUTO_MODEL_CLASS)
-                hidden_states = hidden_states.unsqueeze(0)  # [1, seq, vocab] seq is num_cont_tokens, but we shortened it to 1 here
+                # hidden_states = hidden_states.unsqueeze(0)  # [1, seq, vocab] seq is num_cont_tokens, but we shortened it to 1 here
 
                 # check for one-token continuation cache hits.
                 # noop in case group_by != "contexts" or no cache hit and returns the
@@ -1158,15 +1158,22 @@ class HFLM(TemplateLM):
                     ).unsqueeze(0)  # [1, seq]
                     max_equal = (greedy_tokens == cont_toks).all()
 
+                    # VT top logits
+                    # TODO later move to our extract, but then need to carry and handle tuples of arbitrary
+                    #  model data instead of current hidden tensor (eg in cache)
+                    topk_logits = 10
+                    logits = logits.cpu().to(dtype=torch.float32).detach()  # just to be safe, might not be necessary
+                    topk_logits, topk_idx = torch.topk(logits, topk_logits, dim=-1, largest=True, sorted=True)
+
                     # Obtain log-probs at the corresponding continuation token indices
                     # last_token_slice = logits[:, -1, :].squeeze(0).tolist()
                     logits = torch.gather(logits, 2, cont_toks.unsqueeze(-1)).squeeze(
                         -1
                     )  # [1, seq]
 
-                    #  # VT the sum seems to also consider more continuation tokens if we have them
+                    #  # VT the sum seems to also consider more continuation tokens if we have them, VT they consider sum of "considered answer"
                     # Answer: (log prob, is-exact-match)
-                    answer = (float(logits.sum()), bool(max_equal), hidden_states)
+                    answer = (float(logits.sum()), bool(max_equal), (hidden_states, topk_logits, topk_idx))  #, logits)) here logits are not reliabel since we later at some point just extract some and not necessarily the ones of the correct answer? double check where we'd have to do this
 
                     res.append(answer)
 
@@ -1301,6 +1308,10 @@ class HFLM(TemplateLM):
 
             hidden = self._extract_config["generate"](self.config, cont)
 
+            logits = None
+            if "logits" in cont:  # tuple: one entry per token: batch size x vocab size tensor
+                logits = torch.stack(cont["logits"]).permute(1, 0, 2).cpu().to(dtype=torch.float32).detach()
+
             cont_toks_list = cont.sequences.tolist()  # VT
             for i, (cont_toks, context) in enumerate(zip(cont_toks_list, contexts)):
                 # discard context + left-padding toks if using causal decoder-only LM
@@ -1314,11 +1325,19 @@ class HFLM(TemplateLM):
                     if len(term) > 0:
                         # ignore '' separator,
                         # for seq2seq case where self.tok_decode(self.eot_token_id) = ''
-                        s = s.split(term)[0]
+                        s = s.split(term)[0]  # VT TODO need to adapt logits we extract below!!
 
-                res.append((s, hidden[i].unsqueeze(0)))  # VT changed format for adding hidden, unsqueeze to have it same as MC format
+                if logits is not None:
+                    topk_logits = 10
+                    logits = logits[i].cpu().to(dtype=torch.float32).detach()  # just to be safe, might not be necessary
+                    topk_logits, topk_idx = torch.topk(logits, topk_logits, dim=-1, largest=True, sorted=True)
+                else:
+                    topk_logits, topk_idx = None, None
 
-                self.cache_hook.add_partial("generate_until", (context, gen_kwargs), s)
+                answer = (s, (hidden[i].unsqueeze(0), topk_logits, topk_idx))
+                res.append(answer)  # VT changed format for adding hidden, unsqueeze to have it same as MC format
+
+                self.cache_hook.add_partial("generate_until", (context, gen_kwargs), answer)  #s)
                 pbar.update(1)
         # reorder this group of results back to original unsorted form
         res = re_ords.get_original(res)

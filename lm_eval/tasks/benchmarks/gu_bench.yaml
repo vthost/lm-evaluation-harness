@@ -1,0 +1,14 @@
+group: gu_bench
+group_alias: gu bench
+task:
+  - task: triviaqa
+    num_fewshot: 5
+  - task: truthfulqa_gen
+    num_fewshot: 0
+  - task: gsm8k
+    num_fewshot: 5
+  - task: ifeval
+    num_fewshot: 0
+  - task: leaderboard_math_hard
+    num_fewshot: 4
+
