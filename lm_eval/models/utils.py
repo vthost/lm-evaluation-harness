@@ -442,6 +442,10 @@ class Collator:
         cxt_toks: List[int] = None,
         cont_toks: List[int] = None,
         logits: torch.Tensor = None,
+        # VT +outputs
+        # NOTE tuples are not yet supported in HFLM but for later, would be # Optional[torch.Tensor, Tuple] = None
+        # also, we assume/this seems to be used only in _loglikelihood_tokens for MC, not tested otherwise
+        outputs: torch.Tensor = None
     ) -> Iterator[Tuple[Tuple[str, str], List[int], torch.Tensor]]:
         """
         Retrieves cached single-token continuations and their associated arguments, updating indices as necessary.
@@ -484,19 +488,28 @@ class Collator:
             ] = self._arr_with_indices.pop(tuple(cxt_toks + cont_toks[:-1]))
             if (cache_size := len(cache_hit)) == 1:
                 self._reorder_indices.extend(x[0] for x in cache_hit)
-                yield req_str, cont_toks, logits
+                yield req_str, cont_toks, logits, outputs
             else:
                 # If we have matching requests then expand the batch dimension (no-op) and
                 # yield each along with its corresponding args.
                 multilogits = logits.expand(cache_size, -1, -1).chunk(cache_size)
+
                 indices, req_str, cont_toks = zip(
                     *[(x[0], x[1][0], x[-1][-1]) for x in cache_hit]
                 )
+
+                # VT creates a tuple with orig tensor in each component,
+                # assuming this is only used in _loglikelihood_tokens this is not as critical for memory
+                dim = [-1] * (len(outputs.shape) - 1)  # for batch dim we use cache size
+                if isinstance(outputs, torch.Tensor):
+                    multioutputs = outputs.expand(cache_size, *dim).chunk(cache_size)
+                # else, tuple case untreated..
+
                 self._reorder_indices.extend(indices)
-                for c_key, cont_tok, logit in zip(req_str, cont_toks, multilogits):
-                    yield c_key, cont_tok, logit
+                for c_key, cont_tok, logit, outputs in zip(req_str, cont_toks, multilogits, multioutputs):
+                    yield c_key, cont_tok, logit, outputs
         else:
-            yield req_str, cont_toks, logits
+            yield req_str, cont_toks, logits, outputs
 
     def _reorder(self, arr: Union[List, Tuple[Tuple[int, Any], ...]]) -> Iterator:
         """

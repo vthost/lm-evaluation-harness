@@ -1,6 +1,7 @@
 import abc
 import ast
 import logging
+import os
 import random
 import re
 from collections.abc import Callable
@@ -424,6 +425,26 @@ class Task(abc.ABC):
         ):
             limit = None
 
+        # VT
+        import pandas as pd
+        max_len = len(self.eval_docs)
+        idx_dir = os.getenv("LMEVAL_IDX_DIR", None)
+        if not limit or not idx_dir or max_len <= limit:
+            idx = []
+            if limit and not max_len <= limit:
+                print("> Using no random index since no saving directory specified!!")
+        else:
+            pi = f"{idx_dir}/idx_{self._config.task}_{limit}.txt"  # one could add a seed
+            if os.path.exists(pi):
+                print("> Using existing index for limit", limit)
+                idx = pd.read_csv(pi, header=None)[0].values
+            else:
+                idx = random.sample(range(0, max_len), limit)
+                os.makedirs(idx_dir, exist_ok=True)
+                pd.DataFrame({f"dummy": idx}).to_csv(f"{pi}", index=False, header=None)
+
+        self._idx = sorted(idx)
+
         doc_id_docs = list(
             self.doc_iterator(rank=rank, limit=limit, world_size=world_size)
         )
@@ -675,14 +696,24 @@ class Task(abc.ABC):
                 f"Task dataset (path={self.DATASET_PATH}, name={self.DATASET_NAME}) must have valid or test docs!"
             )
 
+    # VT
+    def enumerate_with_index(self, data, idx):
+        assert max(idx) <= len(data)
+        i = 0
+        for real_i, d in enumerate(data):
+            if real_i in idx:
+                yield i, d
+                i += 1
+
     def doc_iterator(
         self, *, rank: int = 0, limit: Union[int, None] = None, world_size: int = 1
     ) -> Iterator[Tuple[int, Any]]:
         limit = int(limit) if limit else None
         doc_iterator = utils.create_iterator(
-            enumerate(self.eval_docs),
+            # VT +else case
+            enumerate(self.eval_docs) if not self._idx else self.enumerate_with_index(self.eval_docs, self._idx),
             rank=int(rank),
-            limit=limit,
+            limit=limit,  # VT this will have no effect anymore if our index is used
             world_size=int(world_size),
         )
         return doc_iterator

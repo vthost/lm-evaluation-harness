@@ -66,6 +66,7 @@ class TaskOutput:
         self.sample_len = None
         self.sample_metrics = collections.defaultdict(list)
         self.agg_metrics = collections.defaultdict(list)
+        self.outputs = []  # VT
 
     @classmethod
     def from_taskdict(cls, task_name: str, task):
@@ -302,7 +303,7 @@ def prepare_print_tasks(
 
 def consolidate_results(
     eval_tasks: List[TaskOutput],
-) -> Tuple[dict, dict, dict, dict, dict, dict]:
+) -> Tuple[dict, dict, dict, dict, dict, dict, dict]:  # VT +dict
     """
     @param eval_tasks: list(TaskOutput).
     @return: A tuple containing the consolidated results, samples, configs, versions, and num_fewshot.
@@ -326,6 +327,7 @@ def consolidate_results(
     """
     # stores the final result for each task, for each metric/filter pair.
     results = collections.defaultdict(dict)
+    outputs = collections.defaultdict(list)  # VT
     # logs info about each document evaluated.
     samples = collections.defaultdict(list)
     # store num-fewshot value per task
@@ -359,7 +361,8 @@ def consolidate_results(
             results[task_output.task_name][f"{metric}_stderr,{filter_key}"] = (
                 task_output.agg_metrics[f"{metric}_stderr,{filter_key}"]
             )
-    return results, samples, configs, versions, num_fewshot, higher_is_better
+        outputs[task_output.task_name] = task_output.outputs
+    return results, samples, configs, versions, num_fewshot, higher_is_better, outputs
 
 
 def consolidate_group_results(

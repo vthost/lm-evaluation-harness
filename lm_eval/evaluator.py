@@ -248,6 +248,15 @@ def simple_evaluate(
             else:
                 if task_obj.get_config("output_type") == "generate_until":
                     if gen_kwargs is not None:
+                        # VT they copy entire gen_kwargs given
+                        #  since we give them always (to return hidden etc.),
+                        #  don't do that but only copy ours into/to override existing specific ones
+                        for k in gen_kwargs:
+                            if k in task_obj.config["generation_kwargs"] and task_obj.config["generation_kwargs"][k] != \
+                                    gen_kwargs[k]:
+                                print("OVERRIDING gen_kwarg old/new:", k, task_obj.config["generation_kwargs"][k],
+                                      gen_kwargs[k])
+
                         task_obj.set_config(
                             key="generation_kwargs", value=gen_kwargs, update=True
                         )
@@ -420,6 +429,10 @@ def evaluate(
     for task_output in eval_tasks:
         task: Task = task_output.task
 
+        # VT rest not adapted, eg our model's / task's answer format is different
+        assert task.OUTPUT_TYPE in ["multiple_choice", "generate_until", "loglikelihood"]
+        assert task.config.repeats == 1  # otherwise outputs aggregation might fail
+
         if getattr(lm, "MULTIMODAL", False) != getattr(task, "MULTIMODAL", False):
             incompatible_tasks.append(task_output.task_name)
     if len(incompatible_tasks) > 0:
@@ -501,7 +514,12 @@ def evaluate(
 
         # put responses from model into a list of length K for each request.
         for x, req in zip(resps, cloned_reqs):
-            req.resps.append(x)
+            # req.resps.append(x)  # VT added outputs as extra entry so resps is more than just original answer tuples
+            req.resps.append(x[0] if reqtype == "generate_until"  # original generate_until returns no tuple
+                             else x if reqtype == "loglikelihood_rolling"  # not sure if we run into this
+                             else x[:-1])
+            if reqtype != "loglikelihood_rolling":
+                req.outputs.append(x[-1])  # VT we've put our outputs into tuple's -1 position (also above [:-1])
 
         if lm.world_size > 1:
             lm.accelerator.wait_for_everyone()
@@ -525,11 +543,26 @@ def evaluate(
         for instances in instances_by_doc_id.values():
             instances.sort(key=lambda x: x.idx)
         # iterate over different filters used
-        for filter_key in task.instances[0].filtered_resps.keys():
+        for i_filter, filter_key in enumerate(task.instances[0].filtered_resps.keys()):  # VT +i_filter
             doc_iterator = task.doc_iterator(
                 rank=RANK, limit=limit, world_size=WORLD_SIZE
             )
             for doc_id, doc in doc_iterator:
+                # VT
+                # print(doc_id)  # for testing
+                if not doc_id:  # check first
+                    # some checks:
+                    # our assumption how we extract outputs per doc id, we use very first req:
+                    # this might hold anyway if task's repeats is 1 but just to make sure...
+                    if task.OUTPUT_TYPE != "multiple_choice":
+                        assert len(requests) == 1
+                    # NOTE otherwise this seems to be totally task-specific/random fields
+                    #  so checks here are not exhaustive, would need to generalize accroding to fw parsing code
+                    # elif "choices" in doc:  # doesn't work "choices" is a dict of other structure sometimes
+                    #     pass #assert len(requests) == len(doc["choices"])
+                    elif "multiple_choice_targets" in doc:  # not sure if this always works...
+                        assert len(requests) == len(doc["multiple_choice_targets"])
+
                 requests = instances_by_doc_id[doc_id]
                 metrics = task.process_results(
                     doc, [req.filtered_resps[filter_key] for req in requests]
@@ -542,6 +575,7 @@ def evaluate(
                         "target": target,
                         "arguments": [req.args for req in requests],
                         "resps": [req.resps for req in requests],
+                        "filter_key": filter_key,  # VT be more precise, we might end up w/ duplicate examples otherwise
                         "filtered_resps": [
                             req.filtered_resps[filter_key] for req in requests
                         ],
@@ -560,6 +594,46 @@ def evaluate(
                     task_output.logged_samples.append(example)
                 for metric, value in metrics.items():
                     task_output.sample_metrics[(metric, filter_key)].append(value)
+
+                # VT NOTE we assume model outputs don't change for filters, so consider them once only
+                #
+                # hidden of last token don't change,
+                #  BUT if we consider multiple choice logits for subsequent do change
+                if not i_filter:
+                    # read out the field we added to task outputs;
+                    # for MC (the else cases) we need to find the index of the correct answer
+                    # since however last answer token hidden here make less sense
+                    # (since the model didn't decide about this answer itself, and it's forced decoding)
+                    # we could just say we assume our outputs to be independent of generation
+                    # and always use a (random) target_idx = 0
+                    if task.OUTPUT_TYPE != "multiple_choice":
+                        target_idx = 0  #  we only have one request per sample
+                    elif isinstance(target, int):
+                        target_idx = target
+                    elif hasattr(task, "doc_to_text") and isinstance(task.doc_to_text(doc), int):
+                        assert "winogrande" in task.config.dataset_name  # VT assumes this info is available
+                        target_idx = task.doc_to_text(doc)  # seems to be correct for winogrande not sure about rest
+                    elif hasattr(task, "doc_to_choice"):  # assumes choices order corresponds to the ones in requests...
+                        choices = task.doc_to_choice(doc)
+                        target_idx = choices.index(target)
+                    else:
+                        assert False  # notify us....
+                        target_idx = 0  # task.doc_to_choice(target)
+
+                    outs = requests[target_idx].outputs[0]  # TODO why 0 ?? one element [last item from result tuple] for each MC option
+                    # here we can extract anything special to MC, we extract this for choices for now
+                    #  eg top-1 logit for all choices, then add to hs tuple...
+                    if task.OUTPUT_TYPE == "multiple_choice":
+                        # the resps they have are sums over continuation tokens
+                        # (sec tuple component is 1 if answer is exact match else 0, we ignore it),
+                        # may be single letters in MC
+                        req_resps = []
+                        for r in requests:
+                            assert len(r.resps) == 1
+                            req_resps += [r.resps[0][0]]  # first resp, loglikel.
+                        outs += (req_resps,)
+
+                    task_output.outputs += [outs]
 
     if WORLD_SIZE > 1:
         # if multigpu, then gather data across all ranks to rank 0
@@ -604,6 +678,7 @@ def evaluate(
             versions,
             num_fewshot,
             higher_is_better,
+            outputs  # VT
         ) = consolidate_results(eval_tasks)
 
         ### Calculate group metrics ###
@@ -664,6 +739,7 @@ def evaluate(
         }
         if log_samples:
             results_dict["samples"] = dict(samples)
+            results_dict["outputs"] = dict(outputs)  # VT
 
         return results_dict
 

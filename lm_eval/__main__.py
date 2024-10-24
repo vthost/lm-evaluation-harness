@@ -410,6 +410,7 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
     if results is not None:
         if args.log_samples:
             samples = results.pop("samples")
+            outputs = results.pop("outputs")
         dumped = json.dumps(
             results, indent=2, default=handle_non_serializable, ensure_ascii=False
         )
@@ -455,6 +456,10 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
         if args.wandb_args:
             # Tear down wandb run once all the logging is done.
             wandb_logger.run.finish()
+
+        return results, samples, outputs, evaluation_tracker
+
+    return None, None, None, evaluation_tracker
 
 
 if __name__ == "__main__":

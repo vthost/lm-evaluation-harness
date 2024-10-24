@@ -290,11 +290,16 @@ class EvaluationTracker:
                 path = path.joinpath(self.general_config_tracker.model_name_sanitized)
                 path.mkdir(parents=True, exist_ok=True)
 
-                file_results_samples = path.joinpath(
-                    f"samples_{task_name}_{self.date_id}.jsonl"
-                )
+                # VT moved into loop and made "filter_key"-specific
+                # file_results_samples = path.joinpath(
+                #     f"samples_{task_name}_{self.date_id}.jsonl"
+                # )
 
                 for sample in samples:
+                    file_results_samples = path.joinpath(
+                        f"samples_{task_name}_{sample['filter_key']}_{self.date_id}.jsonl"
+                    )
+
                     # we first need to sanitize arguments and resps
                     # otherwise we won't be able to load the dataset
                     # using the datasets library
