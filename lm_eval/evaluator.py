@@ -550,7 +550,8 @@ def evaluate(
             for doc_id, doc in doc_iterator:
                 # VT
                 # print(doc_id)  # for testing
-                if not doc_id:  # check first
+                requests = instances_by_doc_id[doc_id]
+                if not doc_id:  # VT check first
                     # some checks:
                     # our assumption how we extract outputs per doc id, we use very first req:
                     # this might hold anyway if task's repeats is 1 but just to make sure...
@@ -562,8 +563,6 @@ def evaluate(
                     #     pass #assert len(requests) == len(doc["choices"])
                     elif "multiple_choice_targets" in doc:  # not sure if this always works...
                         assert len(requests) == len(doc["multiple_choice_targets"])
-
-                requests = instances_by_doc_id[doc_id]
                 metrics = task.process_results(
                     doc, [req.filtered_resps[filter_key] for req in requests]
                 )
