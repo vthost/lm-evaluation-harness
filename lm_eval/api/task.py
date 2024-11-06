@@ -434,7 +434,8 @@ class Task(abc.ABC):
             if limit and not max_len <= limit:
                 print("> Using no random index since no saving directory specified!!")
         else:
-            pi = f"{idx_dir}/idx_{self._config.task}_{limit}.txt"  # one could add a seed
+            rn = os.getenv("LMEVAL_SEED", "0")
+            pi = f"{idx_dir}/idx_{self._config.task}_{limit}_{rn}.txt"  # one could add a seed
             if os.path.exists(pi):
                 print("> Using existing index for limit", limit)
                 idx = pd.read_csv(pi, header=None)[0].values
@@ -702,6 +703,8 @@ class Task(abc.ABC):
         i = 0
         for real_i, d in enumerate(data):
             if real_i in idx:
+                if "index" not in d:
+                    d["index"] = real_i
                 yield i, d
                 i += 1
 
