@@ -87,7 +87,7 @@ class HFLM(TemplateLM):
         peft: Optional[str] = None,
         delta: Optional[str] = None,
         autogptq: Optional[Union[bool, str]] = False,
-        extract: Optional[str] = None,  # VT
+        extract: Optional[Union[str, int]] = None,  # VT they parse int str as int automatically so need this
         **kwargs,
     ) -> None:
         super().__init__()
@@ -285,17 +285,22 @@ class HFLM(TemplateLM):
                 f"Loglikelihood prefix token id used in evaluation: {self.prefix_token_id}"
             )
 
-        # VT
-        methods = ["generate", "forward_batch", "forward"]
+        # VT these are keys in our config here and also function name suffixes in extract.py
+        methods = ["generate_b", "generate", "forward_b", "forward"]
         self._extract_config = {m: None for m in methods}
         self._extract_config["topk_logits"] = 0
-        if extract:
-            extract, topk = extract.split(";")
-            if extract:
-                fromlist = [f'extract_hidden_{method}' for method in methods]
-                mod = __import__(f'lmeval_ext.extract', fromlist=fromlist)
-                for i, method in enumerate(methods):
-                    self._extract_config[method] = getattr(mod, fromlist[i])
+
+        extract_id = ""
+        if extract and not isinstance(extract, int):
+            extract_id, topk = extract.split("-")
+
+        if not extract_id:  # extract is empty or only topk given
+            extract_id, topk = "topk", extract if extract else 0  # extractor will do nothing if topk=0
+        fromlist = [f'extract_{extract_id}_{method}' for method in methods]
+        mod = __import__(f'lmeval_ext.extract', fromlist=fromlist)
+        for i, method in enumerate(methods):
+            self._extract_config[method] = getattr(mod, fromlist[i])
+
             self._extract_config["topk_logits"] = int(topk)
 
     def _get_accelerate_args(
@@ -1132,24 +1137,24 @@ class HFLM(TemplateLM):
                     "labels": batched_conts,
                 }
 
-            # VT orig code
+            # VT orig code, until loop rest is from us
             # multi_logits = F.log_softmax(
             #     self._model_call(batched_inps, **call_kwargs), dim=-1
             # )  # [batch, padding_length (inp or cont), vocab]
 
             call_kwargs["output_hidden_states"] = True  # one could also set it in model config as they do; output_scores=True
-            outputs = self._model_call(batched_inps, **call_kwargs)
+            output_b = self._model_call(batched_inps, **call_kwargs)
 
-            # process outputs and pass them along all subsequent steps below
-            fn1 = self._extract_config["forward_batch"]
-            fn2 = self._extract_config["forward"]
-            batched_outputs = fn1(self.config, outputs) if fn1 is not None \
-                else torch.zeros((batch_size, 0))
+            # potentially add extra entries to output_b, and process them later, below using fn
+            fn_b, fn, topk = (self._extract_config["forward_b"], self._extract_config["forward"],
+                              self._extract_config["topk_logits"])
+            output_b = fn_b(output_b, model_config=self.config, topk=topk)
 
-            multi_logits = F.log_softmax(outputs.logits, dim=-1)  # [batch, padding_length (inp or cont), vocab]
+            multi_logits = F.log_softmax(output_b.logits, dim=-1)  # [batch, padding_length (inp or cont), vocab]
 
-            for (request_str, ctx_tokens, _), logits, inplen, cont_toks, outputs in zip(
-                chunk, multi_logits, inplens, cont_toks_list, batched_outputs  # use *batched_outputs here and w/ hidden above if tuples(?)
+            idx = 0
+            for (request_str, ctx_tokens, _), logits, inplen, cont_toks in zip(
+                chunk, multi_logits, inplens, cont_toks_list
             ):
                 # Slice to original seq length
                 contlen = len(cont_toks)
@@ -1158,7 +1163,7 @@ class HFLM(TemplateLM):
                 # also discards + checks for "virtual tokens" in the causal LM's input window
                 # from prompt/prefix tuning tokens, if applicable
                 ctx_len = (
-                    inplen + (logits.shape[0] - padding_len_inp)
+                    inplen + (logits.shape[0] - padding_len_inp)  # TODO vt doublecheck is logits.shape[0] just generation length?
                     if self.backend == "causal"
                     else None
                 )
@@ -1168,33 +1173,25 @@ class HFLM(TemplateLM):
                 # Check if per-token argmax is exactly equal to continuation
                 greedy_tokens = logits.argmax(dim=-1)
 
-                # VT logits shape: contlen (they call it seq) x vocab;
-                # note very first above??? in logits? is last from ctx since we gave the model one cont token less
-                # VT outputs shape [1, seq, vocab] seq is num_cont_tokens, but we shortened it to 1 here
-                outputs = fn2(outputs, contlen=contlen, inplen=ctx_len, model_class=self.AUTO_MODEL_CLASS) \
-                            if fn2 is not None else torch.zeros((1,0,0))
+                # VT
+                # logits shape: contlen (they call it seq) x vocab
+                # outputs shape [1, seq, vocab] seq is num_cont_tokens, is often 1 here (eg for "A" or "positive")
+                output = fn(output_b, idx, cont_toks=cont_toks, contlen=contlen, inplen=ctx_len, topk=topk,
+                            model_class=self.AUTO_MODEL_CLASS)
+                idx += 1
 
                 # check for one-token continuation cache hits.
                 # noop in case group_by != "contexts" or no cache hit and returns the
                 # original args. Otherwise, expands the logits batch dimension and yields each
                 # batch along with matching continuation tokens and prompt strings.
                 # logits -> [1, seq, vocab]
-                for request_str, cont_toks, logits, outputs in re_ord.get_cache(
+                for request_str, cont_toks, logits, output in re_ord.get_cache(
                     req_str=request_str,
                     cxt_toks=ctx_tokens,
                     cont_toks=cont_toks,
                     logits=logits,
-                    outputs=outputs
+                    outputs=output
                 ):
-                    # VT also extract top logits,
-                    # might add to our extract later, and the 10 flexible,
-                    # but then we'd have to iterate over tuples (instead of outputs tensor)
-                    # above and generally (eg in cache)
-                    topk_logits, topk_idx = torch.topk(logits, self._extract_config["topk_logits"],
-                                                       dim=-1, largest=True, sorted=True)
-                    # only on results since logits need to be on same device as cont_toks below
-                    topk_logits, topk_idx = topk_logits.cpu().detach(), topk_idx.cpu().detach()
-
                     cont_toks = torch.tensor(
                         cont_toks, dtype=torch.long, device=self.device
                     ).unsqueeze(0)  # [1, seq]
@@ -1206,8 +1203,8 @@ class HFLM(TemplateLM):
                         -1
                     )  # [1, seq]
 
-                    # Answer: (log prob, is-exact-match)  # VT +(hidden, topk_logits, topk_idx)
-                    answer = (float(logits.sum()), bool(max_equal), (outputs, topk_logits, topk_idx))
+                    # Answer: (log prob, is-exact-match)  # VT + our outputs
+                    answer = (float(logits.sum()), bool(max_equal), output)
 
                     res.append(answer)
 
@@ -1337,16 +1334,11 @@ class HFLM(TemplateLM):
                 **kwargs,
             )
 
-            # VT not sure if works with sampling
-            dec_hidden_label = "decoder_hidden_states" if "decoder_hidden_states" in cont else "hidden_states"
-            assert cont[dec_hidden_label][0][-1].shape[0] == batch_size
-
-            fn = self._extract_config["generate"]
-            outputs = fn(self.config, cont) if fn else torch.zeros(batch_size, 0)
-
-            # tuple: one entry per token: batch size x vocab size tensor
-            logits = (torch.stack(cont["logits"]).permute(1, 0, 2).cpu().
-                      to(dtype=torch.float32).detach()) if "logits" in cont else None
+            # VT
+            fn_b, fn, topk = (self._extract_config["generate_b"], self._extract_config["generate"],
+                              self._extract_config["topk_logits"])
+            # potentially add extra entries to cont, and process them later, below using fn
+            output_b = fn_b(cont, model_config=self.config, topk=topk)
 
             cont_toks_list = cont.sequences.tolist()  # was cont.tolist()
             for i, (cont_toks, context) in enumerate(zip(cont_toks_list, contexts)):  # VT +enumerate
@@ -1363,16 +1355,11 @@ class HFLM(TemplateLM):
                         # for seq2seq case where self.tok_decode(self.eot_token_id) = ''
                         s = s.split(term)[0]
 
-                # VT
-                if logits is not None:
-                    logits = logits[i].cpu().detach()
-                    topk_logits, topk_idx = torch.topk(logits, self._extract_config["topk_logits"],
-                                                       dim=-1, largest=True, sorted=True)
-                else:
-                    topk_logits, topk_idx = None, None
-
-                answer = (s, (outputs[i].unsqueeze(0), topk_logits, topk_idx))
-                res.append(answer)  # VT create results tuple
+                s_enc = self.tok_encode(s)
+                output = fn(output_b, i, topk=topk, inplen=context_enc.shape[-1], contlen=len(s_enc),
+                            model_config=self.config)
+                answer = (s, output)
+                res.append(answer)  # VT results tuple instead of just returning generated text
 
                 self.cache_hook.add_partial("generate_until", (context, gen_kwargs), answer)  # VT s)
                 pbar.update(1)

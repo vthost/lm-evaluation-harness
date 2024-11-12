@@ -443,9 +443,9 @@ class Collator:
         cont_toks: List[int] = None,
         logits: torch.Tensor = None,
         # VT +outputs
-        # NOTE tuples are not yet supported in HFLM but for later, would be # Optional[torch.Tensor, Tuple] = None
-        # also, we assume/this seems to be used only in _loglikelihood_tokens for MC, not tested otherwise
-        outputs: torch.Tensor = None
+        # we assume/this seems is used only in _loglikelihood_tokens for MC, not tested otherwise
+        # (but current overall code search shows this)
+        outputs: dict = None
     ) -> Iterator[Tuple[Tuple[str, str], List[int], torch.Tensor]]:
         """
         Retrieves cached single-token continuations and their associated arguments, updating indices as necessary.
@@ -499,11 +499,9 @@ class Collator:
                 )
 
                 # VT creates a tuple with orig tensor in each component,
-                # assuming this is only used in _loglikelihood_tokens this is not as critical for memory
-                dim = [-1] * (len(outputs.shape) - 1)  # for batch dim we use cache size
-                if isinstance(outputs, torch.Tensor):
-                    multioutputs = outputs.expand(cache_size, *dim).chunk(cache_size)
-                # else, tuple case untreated..
+                # assuming this is only used in _loglikelihood_tokens, this is not as critical for memory
+                # NOTE we don't create deep copies for now
+                multioutputs = [outputs for _ in range(cache_size)]
 
                 self._reorder_indices.extend(indices)
                 for c_key, cont_tok, logit, outputs in zip(req_str, cont_toks, multilogits, multioutputs):

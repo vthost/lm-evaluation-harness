@@ -630,7 +630,7 @@ def evaluate(
                         for r in requests:
                             assert len(r.resps) == 1
                             req_resps += [r.resps[0][0]]  # first resp, loglikel.
-                        outs += (req_resps,)
+                        outs["multiple_choice_ll"] = req_resps  # outs += (req_resps,)
 
                     task_output.outputs += [outs]
 
