@@ -1339,24 +1339,66 @@ class HFLM(TemplateLM):
                               self._extract_config["topk_logits"])
             # potentially add extra entries to cont, and process them later, below using fn
             output_b = fn_b(cont, model_config=self.config, topk=topk)
-
             cont_toks_list = cont.sequences.tolist()  # was cont.tolist()
             for i, (cont_toks, context) in enumerate(zip(cont_toks_list, contexts)):  # VT +enumerate
                 # discard context + left-padding toks if using causal decoder-only LM
                 if self.backend == "causal":
-                    cont_toks = cont_toks[context_enc.shape[1] :]
+                    cont_toks = cont_toks[context_enc.shape[1]:]
 
                 s = self.tok_decode(cont_toks)
 
-                # use secondary stop seqs to cut off should-have-been-stopped content post-hoc
+                # VT in order to extract logits at correct tokens,
+                # we need to extend their processing, which extracts part of the text
+                # to token level
+                cont_toks_cut = cont_toks
                 for term in until:
                     if len(term) > 0:
-                        # ignore '' separator,
-                        # for seq2seq case where self.tok_decode(self.eot_token_id) = ''
+                        s_all = s.split(term)  # VT
                         s = s.split(term)[0]
 
-                s_enc = self.tok_encode(s)
-                output = fn(output_b, i, topk=topk, inplen=context_enc.shape[-1], contlen=len(s_enc),
+                        # VT
+                        if len(s_all) == 1:  # no split, no changes
+                            continue
+
+                        reconstructed, ok = "", 0
+                        for t_i, token_id in enumerate(cont_toks_cut):
+                            # [token_id] see splash.py example,
+                            # tokens decoded concatenated don't always yield same as list decoded at once
+                            # we skip special here because they also skip inside above s =
+                            reconstructed = self.tokenizer.decode(cont_toks_cut[:t_i+1], skip_special_tokens=True)
+                            # note, if s.strip() == "" or just s == ""
+                            # the below reconstructed == s applies at first call
+                            # we can't fully solve this case, so just go with that and always only record the first token
+                            # second may be case if token_id covers parts beyond s (not sure if can apply, just to be safe)
+                            if reconstructed == s or reconstructed.startswith(s):
+                                ok = 1
+                                # in order to make sure, we include last one below in cont_toks_cut[:t_i+1]
+                                #  in case cont_toks_cut is not empty (TODO maybe it would not throw any error anyway?)
+                                t_i += 1
+                                break
+                        # if not ok:
+                        #     print("NOOOOOOOOOO")
+                        #     print(s_all)
+                        #     print("term", term)
+                        #     print("recon", reconstructed)
+                        #     print("tok cut", cont_toks_cut)
+                        #     print("tok", cont_toks)
+                        assert ok  # make sure you set min_new_tokens=2 in generation args
+                        # +1 to include eos/until & its logits
+                        # since we split at this one, we know it is available and the code cannot break
+                        # unless the model only generates eos
+                        # note that we assume we require min_tokens is set
+                        cont_toks_cut = cont_toks_cut[:t_i+1]
+
+                # VT original
+                # use secondary stop seqs to cut off should-have-been-stopped content post-hoc
+                # for term in until:
+                #     if len(term) > 0:
+                #         # ignore '' separator,
+                #         # for seq2seq case where self.tok_decode(self.eot_token_id) = ''
+                #         s = s.split(term)[0]
+
+                output = fn(output_b, i, topk=topk, inplen=context_enc.shape[-1], contlen=len(cont_toks_cut),
                             model_config=self.config)
                 answer = (s, output)
                 res.append(answer)  # VT results tuple instead of just returning generated text

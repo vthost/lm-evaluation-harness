@@ -98,7 +98,8 @@ def process_results_gen(doc, results):
     rougeL_incorrect = np.nanmax(rougeL_scores[len(true_refs) :])
     rougeL_max = rougeL_correct
     rougeL_diff = rougeL_correct - rougeL_incorrect
-    rougeL_acc = int(rougeL_correct > rougeL_incorrect)
+    # rougeL_acc = int(rougeL_correct > rougeL_incorrect)  # VT orig threshold is at 0.5
+    rougeL_acc = int((rougeL_correct / (rougeL_correct+rougeL_incorrect)) > 0.3)
 
     return {
         # "bleurt_max": bleurt_max,
