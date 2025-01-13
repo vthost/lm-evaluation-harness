@@ -1387,7 +1387,7 @@ class HFLM(TemplateLM):
                         # +1 to include eos/until & its logits
                         # since we split at this one, we know it is available and the code cannot break
                         # unless the model only generates eos
-                        # note that we assume we require min_tokens is set
+                        # note that we assume we require min_tokens=2 is set
                         cont_toks_cut = cont_toks_cut[:t_i+1]
 
                 # VT original
@@ -1398,7 +1398,7 @@ class HFLM(TemplateLM):
                 #         # for seq2seq case where self.tok_decode(self.eot_token_id) = ''
                 #         s = s.split(term)[0]
 
-                output = fn(output_b, i, topk=topk, inplen=context_enc.shape[-1], contlen=len(cont_toks_cut),
+                output = fn(output_b, i, topk=topk, inplen=context_enc.shape[-1], contlen=len(cont_toks_cut),  # NOTE this includes eos, if received, into length!
                             model_config=self.config)
                 answer = (s, output)
                 res.append(answer)  # VT results tuple instead of just returning generated text
