@@ -22,7 +22,7 @@ from transformers.models.auto.modeling_auto import (
     MODEL_FOR_CAUSAL_LM_MAPPING_NAMES,
     MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING_NAMES,
 )
-
+import math
 from lm_eval import utils
 from lm_eval.api.instance import Instance
 from lm_eval.api.model import TemplateLM
@@ -291,11 +291,11 @@ class HFLM(TemplateLM):
         self._extract_config["topk_logits"] = 0
 
         extract_id = ""
-        if extract and not isinstance(extract, int):
+        if extract and not isinstance(extract, int) and not isinstance(extract, float):
             extract_id, topk = extract.split("-")
 
         if not extract_id:  # extract is empty or only topk given
-            extract_id, topk = "topk", extract if extract else 0  # extractor will do nothing if topk=0
+            extract_id, topk = "topk", int(math.fabs(extract)) if extract else 0  # extractor will do nothing if topk=0
         fromlist = [f'extract_{extract_id}_{method}' for method in methods]
         mod = __import__(f'lmeval_ext.extract', fromlist=fromlist)
         for i, method in enumerate(methods):
