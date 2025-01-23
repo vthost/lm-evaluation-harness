@@ -123,6 +123,7 @@ class EvaluationTracker:
         leaderboard_url: str = "",
         point_of_contact: str = "",
         gated: bool = False,
+        postfix: str = ""
     ) -> None:
         """
         Creates all the necessary loggers for evaluation tracking.
@@ -151,6 +152,7 @@ class EvaluationTracker:
         self.point_of_contact = point_of_contact
         self.api = HfApi(token=token) if token else None
         self.gated_repo = gated
+        self.out_postfix = postfix
 
         if not self.api and (push_results_to_hub or push_samples_to_hub):
             raise ValueError(
@@ -226,7 +228,7 @@ class EvaluationTracker:
                 )
 
                 path = Path(self.output_path if self.output_path else Path.cwd())
-                path = path.joinpath(self.general_config_tracker.model_name_sanitized)
+                path = path.joinpath(self.general_config_tracker.model_name_sanitized + f"{self.out_postfix}")
                 path.mkdir(parents=True, exist_ok=True)
 
                 self.date_id = datetime.now().isoformat().replace(":", "-")
@@ -287,7 +289,7 @@ class EvaluationTracker:
                 eval_logger.info(f"Saving per-sample results for: {task_name}")
 
                 path = Path(self.output_path if self.output_path else Path.cwd())
-                path = path.joinpath(self.general_config_tracker.model_name_sanitized)
+                path = path.joinpath(self.general_config_tracker.model_name_sanitized + f"{self.out_postfix}")
                 path.mkdir(parents=True, exist_ok=True)
 
                 # VT moved into loop and made "filter_key"-specific
