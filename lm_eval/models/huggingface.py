@@ -1162,8 +1162,12 @@ class HFLM(TemplateLM):
                 # (discard context toks if decoder-only ; discard right-padding)
                 # also discards + checks for "virtual tokens" in the causal LM's input window
                 # from prompt/prefix tuning tokens, if applicable
+                # VT NOTE is confusing, by ctx they mean here ctx+cont (also hand that as inplen over below)
+                # padding is longest in batch, inp is orig one not padded
+                # ISN't logits.shape[0] - padding_len_inp always == 0 ?? because inp was padded to overall padding_len_inp
+                # inp is right padded!
                 ctx_len = (
-                    inplen + (logits.shape[0] - padding_len_inp)  # TODO vt doublecheck is logits.shape[0] just generation length?
+                    inplen + (logits.shape[0] - padding_len_inp)
                     if self.backend == "causal"
                     else None
                 )
@@ -1388,7 +1392,8 @@ class HFLM(TemplateLM):
                         # since we split at this one, we know it is available and the code cannot break
                         # unless the model only generates eos
                         # note that we assume we require min_tokens=2 is set
-                        cont_toks_cut = cont_toks_cut[:t_i+1]
+                        # VT removed +1 for eos now
+                        cont_toks_cut = cont_toks_cut[:t_i]
 
                 # VT original
                 # use secondary stop seqs to cut off should-have-been-stopped content post-hoc

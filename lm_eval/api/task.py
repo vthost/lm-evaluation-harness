@@ -437,7 +437,7 @@ class Task(abc.ABC):
             rn = os.getenv("LMEVAL_SEED", "0")
             pi = f"{idx_dir}/idx_{self._config.task}_{limit}_{rn}.txt"  # one could add a seed
             if os.path.exists(pi):
-                print("> Using existing index for limit", limit)
+                print("> Using existing index for limit", limit, "task", self._config.task, idx_dir)
                 idx = pd.read_csv(pi, header=None)[0].values
             else:
                 idx = random.sample(range(0, max_len), limit)
