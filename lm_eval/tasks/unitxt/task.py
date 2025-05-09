@@ -8,6 +8,7 @@ import importlib.util
 import re
 from functools import partial
 from typing import Any, Dict, Optional
+from copy import deepcopy
 
 import datasets
 import evaluate
@@ -100,7 +101,11 @@ class Unitxt(ConfigurableTask):
         doc["target"]
 
     def get_arguments(self, doc, ctx):
-        return (ctx, {"until": ["\n"]})
+        if self.OUTPUT_TYPE == "generate_until":
+            arg2 = deepcopy(self.config.generation_kwargs)
+            arg2["until"] = ["\n"]
+        # return (ctx, {"until": ["\n"]})
+        return (ctx, arg2)
 
     def construct_requests(self, doc, ctx, **kwargs):
         """Uses RequestFactory to construct Requests and returns an iterable of
