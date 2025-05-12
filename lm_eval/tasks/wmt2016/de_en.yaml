@@ -1,0 +1,14 @@
+task: wmt-de-en
+dataset_path: wmt16
+dataset_name: de-en
+training_split: train
+validation_split: validation
+output_type: generate_until
+doc_to_text: "translate English to German: {{translation.en}}"
+doc_to_target: "{{translation.de}}"
+metric_list:
+  - metric: !function metrics.bleu
+    aggregation: !function metrics.agg_bleu
+    higher_is_better: true
+metadata:
+  version: 1.0
