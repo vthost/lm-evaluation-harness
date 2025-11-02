@@ -476,6 +476,7 @@ def evaluate(
     # number of fwd passes per distributed rank is equal
     padding_requests = defaultdict(int)
 
+    # VT here we have one entry per dataset / task yaml
     # get lists of group hierarchy and each type of request
     eval_tasks = get_task_list(task_dict)
     if not log_samples:
@@ -494,7 +495,7 @@ def evaluate(
 
         # VT rest not adapted, eg our model's / task's answer format is different
         assert task.OUTPUT_TYPE in ["multiple_choice", "generate_until", "loglikelihood"]
-        assert task.config.repeats == 1  # otherwise outputs aggregation might fail
+        # assert task.config.repeats == 1  # otherwise outputs aggregation might fail TODO 1
 
         if getattr(lm, "MULTIMODAL", False) != getattr(task, "MULTIMODAL", False):
             incompatible_tasks.append(task_output.task_name)
@@ -545,6 +546,8 @@ def evaluate(
         )
         if write_out:
             print_writeout(task)
+        # VT if we have return k filter, below we still have one instance per sample, just a repeats is set
+        # TODO add a  note, is this similar for MC or do we directly have multiple instances
         # aggregate Instances by LM method requested to get output.
         for instance in task.instances:
             reqtype = instance.request_type
@@ -571,6 +574,8 @@ def evaluate(
     for reqtype, reqs in requests.items():
         eval_logger.info(f"Running {reqtype} requests")
         # create `K` copies of each request `req` based off `K = req.repeats`
+        # VT this is eg for take first k filter, is * repeats so will NOT DO DEEPCOPY
+        #  ie in below req.resps.append we append all resps for take first k with same req instance
         cloned_reqs = []
         for req in reqs:
             cloned_reqs.extend([req] * req.repeats)
@@ -582,7 +587,7 @@ def evaluate(
         # run requests through model
         resps = getattr(lm, reqtype)(cloned_reqs)
 
-        # put responses from model into a list of length K for each request.
+        # VT add responses to request objects (are separate requests for MC items BUT )
         for x, req in zip(resps, cloned_reqs):
             # req.resps.append(x)  # VT added outputs as extra entry so resps is more than just original answer tuples
             req.resps.append(x[0] if reqtype == "generate_until"  # original generate_until returns no tuple
@@ -634,17 +639,18 @@ def evaluate(
                     doc_id_true = doc_id
                 requests = instances_by_doc_id[doc_id]
                 if not doc_id:  # VT check first
-                    # some checks:
-                    # our assumption how we extract outputs per doc id, we use very first req:
-                    # this might hold anyway if task's repeats is 1 but just to make sure...
-                    if task.OUTPUT_TYPE != "multiple_choice":
-                        assert len(requests) == 1
-                    # NOTE otherwise this seems to be totally task-specific/random fields
-                    #  so checks here are not exhaustive, would need to generalize accroding to fw parsing code
-                    # elif "choices" in doc:  # doesn't work "choices" is a dict of other structure sometimes
-                    #     pass #assert len(requests) == len(doc["choices"])
-                    elif "multiple_choice_targets" in doc:  # not sure if this always works...
-                        assert len(requests) == len(doc["multiple_choice_targets"])
+                    pass
+                    # # some checks: todo 1 rather assume batch size one and know if we extract other outputs is just for first sample
+                    # # our assumption how we extract outputs per doc id, we use very first req:
+                    # # this might hold anyway if task's repeats is 1 but just to make sure...
+                    # if task.OUTPUT_TYPE != "multiple_choice":
+                    #     assert len(requests) == 1
+                    # # NOTE otherwise this seems to be totally task-specific/random fields
+                    # #  so checks here are not exhaustive, would need to generalize accroding to fw parsing code
+                    # # elif "choices" in doc:  # doesn't work "choices" is a dict of other structure sometimes
+                    # #     pass #assert len(requests) == len(doc["choices"])
+                    # elif "multiple_choice_targets" in doc:  # not sure if this always works...
+                    #     assert len(requests) == len(doc["multiple_choice_targets"])
                 metrics = task.process_results(
                     doc, [req.filtered_resps[filter_key] for req in requests]
                 )
@@ -690,7 +696,7 @@ def evaluate(
                     # we could just say we assume our outputs to be independent of generation
                     # and always use a (random) target_idx = 0
                     if task.OUTPUT_TYPE != "multiple_choice":
-                        target_idx = 0  #  we only have one request per sample
+                        target_idx = 0  #  we only have one request per data sample (might contain multiple sampled samples)
                     elif isinstance(target, int):
                         target_idx = target
                     elif hasattr(task, "doc_to_text") and isinstance(task.doc_to_text(doc), int):
@@ -703,7 +709,10 @@ def evaluate(
                         assert False  # notify us....
                         target_idx = 0  # task.doc_to_choice(target)
 
-                    outs = requests[target_idx].outputs[0]  # TODO why 0 ?? one element [last item from result tuple] for each MC option
+                    #  NOTE we collect outputs in list, should have one, but if we have multiple requests
+                    #  (due take first k argument and sampling) we also have multiple outputs,
+                    # we here extract the first and discard the rest. TODO double check but seems for MC we have separate requests and one output per each
+                    outs = requests[target_idx].outputs[0]
                     # here we can extract anything special to MC, we extract this for choices for now
                     #  eg top-1 logit for all choices, then add to hs tuple...
                     if task.OUTPUT_TYPE == "multiple_choice":

@@ -26,6 +26,7 @@ def doc_to_target(doc):
     additional_answers = doc.get("additional_answers")
     if additional_answers:
         for key in additional_answers:
+            if not additional_answers[key]["input_text"] or len(additional_answers[key]["input_text"]) < turn_id: continue  # VT for if we run on train set, seems to have dummy empty additional answers only see https://huggingface.co/datasets/EleutherAI/coqa/viewer/default/train 
             additional_answer_for_turn = additional_answers[key]["input_text"][
                 turn_id - 1
             ]

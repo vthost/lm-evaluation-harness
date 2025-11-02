@@ -1428,15 +1428,27 @@ class HFLM(TemplateLM):
                               self._extract_config["topk_logits"])
             # potentially add extra entries to cont, and process them later, below using fn
             output_b = fn_b(cont, model_config=self.config, topk=topk)
-            cont_toks_list = cont.sequences.tolist()  # was cont.tolist()
-            for i, (cont_toks, context) in enumerate(zip(cont_toks_list, contexts)):  # VT +enumerate
+            cont_toks_list = cont.sequences.tolist()  # was cont.tolist()  # TODO only check what happens with samples and batch > 1
+
+            # VT not used rn
+            # def apply_until_terms_to_sample(sample_toks):
+            #     if self.backend == "causal":
+            #         sample_toks = sample_toks[context_enc.shape[1]:]
+            #
+            #     sample_text = self.tok_decode(sample_toks)
+            #     for term in until:
+            #         if len(term) > 0:
+            #             sample_text = sample_text.split(term)[0]
+            #     return sample_text
+            tt = zip(cont_toks_list, contexts)
+            for i, (cont_toks, context) in enumerate(tt):  # VT +enumerate, OLD TEMP we extended to sample sequences but doesn't matter, will stop at shorter contexts one ie after 1 with batch size 1
                 # discard context + left-padding toks if using causal decoder-only LM
                 if self.backend == "causal":
                     cont_toks = cont_toks[context_enc.shape[1]:]
 
-                s = self.tok_decode(cont_toks)
+                s = self.tok_decode(cont_toks)  # TODO might not skip special tokens for uq/analysis
 
-                # VT in order to extract logits at correct tokens,
+                # VT in order to extract logits at correct tokens [ie stop at EOS],
                 # we need to extend their processing, which extracts part of the text
                 # to token level
                 cont_toks_cut = cont_toks
@@ -1446,9 +1458,10 @@ class HFLM(TemplateLM):
                         s = s.split(term)[0]
 
                         # VT
-                        if len(s_all) == 1:  # no split, no changes
+                        if len(s_all) == 1:  # no split, no changes, continue to next possible until term
                             continue
 
+                        # otherwise find tokens/logits positions until this term
                         reconstructed, ok = "", 0
                         for t_i, token_id in enumerate(cont_toks_cut):
                             # [token_id] see splash.py example,
@@ -1490,6 +1503,10 @@ class HFLM(TemplateLM):
 
                 output = fn(output_b, i, topk=topk, inplen=context_enc.shape[-1], contlen=len(cont_toks_cut),  # NOTE this includes eos, if received, into length!
                             model_config=self.config)
+                # VT does not work since we want filtered_responses. so will need to call individual it seems, anyway we won't have to store logits for those!
+                # if len(cont_toks_list) > 1:  # may als/better check if we do sampling? todo check model config
+                #     # is simpler (original) form of above loop, just decodes and applies eos (w/o tok position extraction)
+                #     output["samples"] = [apply_until_terms_to_sample(sample_toks) for sample_toks in cont_toks_list]
                 answer = (s, output)
                 res.append(answer)  # VT results tuple instead of just returning generated text
 
