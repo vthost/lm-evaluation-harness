@@ -28,6 +28,7 @@ eval_logger = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:
+    from PIL import Image
     from transformers import PreTrainedTokenizerBase
     from transformers.configuration_utils import PretrainedConfig
 
@@ -427,9 +428,13 @@ class Collator:
                 batch = self.get_chunks(values, n=n, fn=batch_fn)
                 yield from batch
         elif self._group_by == "contexts":
-            # Get one sample from each key
+            # Get one sample from each key.
+            # Select longest continuation per group to ensure sufficient context logits
             values = self._reorder(
-                [value[0] for value in self._arr_with_indices.values()]
+                [
+                    max(value, key=lambda x: len(x[1][-1]))
+                    for value in self._arr_with_indices.values()
+                ]
             )
             batch = self.get_chunks(values, n=n, fn=batch_fn)
             yield from batch
@@ -740,3 +745,203 @@ def handle_stop_sequences(
     if eos is not None and eos not in until:
         until.append(eos)
     return until
+
+
+def resize_image(
+    image: "Image.Image",
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    max_dimension: Optional[int] = None,
+    keep_aspect_ratio: bool = True,
+    resample_filter: Union[int, str] = "Image.BICUBIC",
+    min_width: int = 1,
+    min_height: int = 1,
+) -> "Image.Image":
+    """
+    Resizes a PIL Image object with flexible options.
+
+    Args:
+        image: The PIL Image object to resize.
+        width: Target width in pixels.
+        height: Target height in pixels.
+        max_dimension: Maximum size for the longer dimension of the image.
+        keep_aspect_ratio: If True (default) and both width and height are provided,
+                          the image is resized to fit within these dimensions while
+                          maintaining its aspect ratio. If False, the image is stretched
+                          to the exact width and height.
+        resample_filter: The resampling filter to use for resizing.
+                        Defaults to Image.BICUBIC.
+        min_width: Minimum width for the resized image. Defaults to 1.
+        min_height: Minimum height for the resized image. Defaults to 1.
+
+    Returns:
+        The resized PIL Image object. If no resize parameters are provided
+        or if the image already meets the criteria, the original image is returned.
+
+    Order of precedence for resizing:
+    1. If width AND height are provided:
+       - If keep_aspect_ratio is True: Fits image within bounds, preserving aspect ratio.
+       - If keep_aspect_ratio is False: Resizes to exact dimensions (may distort).
+    2. Else if only width is provided: Calculates height proportionally.
+    3. Else if only height is provided: Calculates width proportionally.
+    4. Else if max_dimension is provided: Resizes the longest side to max_dimension
+       and scales the other side proportionally.
+    5. If none of the above are provided, returns the original image.
+    """
+    original_width, original_height = image.size
+
+    # If no arguments are provided, return the original image
+    if width is None and height is None and max_dimension is None:
+        return image
+
+    new_width = original_width
+    new_height = original_height
+
+    if width is not None and height is not None:
+        # No resize needed if image is already smaller than target dimensions
+        if original_width <= width and original_height <= height:
+            return image
+
+        if keep_aspect_ratio:
+            # Calculate the ratio to fit within the target dimensions
+            ratio = min(width / original_width, height / original_height)
+            new_width = int(original_width * ratio)
+            new_height = int(original_height * ratio)
+        else:
+            # Stretch to exact dimensions
+            new_width = width
+            new_height = height
+    elif width is not None:
+        # No resize needed if width is already smaller
+        if original_width <= width:
+            return image
+        # Calculate height proportionally
+        new_width = width
+        new_height = int((original_height / original_width) * new_width)
+    elif height is not None:
+        # No resize needed if height is already smaller
+        if original_height <= height:
+            return image
+        # Calculate width proportionally
+        new_height = height
+        new_width = int((original_width / original_height) * new_height)
+    elif max_dimension is not None:
+        # No resize needed if both dimensions are smaller than max_dimension
+        if max(original_height, original_width) <= max_dimension:
+            return image
+
+        if original_width > original_height:
+            # Width is the longer side
+            new_width = max_dimension
+            new_height = int((original_height / original_width) * new_width)
+        else:
+            # Height is the longer side or sides are equal
+            new_height = max_dimension
+            new_width = int((original_width / original_height) * new_height)
+
+    # Ensure dimensions are at least minimum values
+    new_width = max(min_width, new_width)
+    new_height = max(min_height, new_height)
+
+    # Perform the resize operation with the calculated dimensions
+    return image.resize((new_width, new_height), resample_filter)
+
+
+def truncate_tokens(
+    tokens: List[int],
+    max_length: int,
+    tokenizer: "PreTrainedTokenizerBase",
+    strategy: str = "left",
+):
+    if strategy == "left":
+        return tokens[-max_length:]
+    elif strategy == "right":
+        return tokens[:max_length]
+    elif strategy == "middle":
+        # Truncate the middle of the sequence
+        left_length = max_length // 2
+        right_length = max_length - left_length
+        return tokens[:left_length] + tokens[-right_length:]
+    return None
+
+
+def postprocess_generated_text(
+    generation: str, stop: Union[list[str], str, None], think_end_token: Optional[str], cont_toks=None, tokenizer=None  # VT + optional cont_toks
+) -> str:
+    """
+    Post-processes the generated text by stripping stop sequences and optional thinking markers.
+
+    Args:
+        generation (str): The generated text to be processed.
+        stop (Optional[list[str]]): Stop sequence(s) to remove. Text is truncated
+            at the first occurrence of any stop sequence.
+        think_end_token (Optional[str]): Token marking end of thinking section. If provided,
+            returns only the text after this token (discarding thinking content).
+
+    Returns:
+        str: The processed generation - text before stop sequences and after thinking sections.
+    """
+
+    # VT in order to extract logits at correct tokens [ie stop at EOS],
+    # we need to extend their processing, which extracts part of the text
+    # to token level
+    cont_toks_cut = cont_toks
+
+    if stop:
+        stop = [stop] if isinstance(stop, str) else stop
+        for term in stop:
+            if len(term) > 0:
+                # ignore '' separator,
+                # for seq2seq case where self.tok_decode(self.eot_token_id) = ''
+
+                # VT before their' dropping rest save everything
+                # s_all only needed to check if splitting actually happened
+                s_all = generation.split(term)
+                generation = generation.split(term)[0]   # VT original
+
+                # VT rest is our reconstruction part
+                if len(s_all) == 1:  # no split, no changes, continue to next possible until term
+                    continue
+
+                # otherwise find tokens/logits positions until this term
+                reconstructed, ok = "", 0
+                for t_i, token_id in enumerate(cont_toks_cut):
+                    # [token_id] see splash.py example,
+                    # tokens decoded concatenated don't always yield same as list decoded at once
+                    # we skip special here because they also skip inside above s =
+                    reconstructed = tokenizer.decode(cont_toks_cut[:t_i + 1], skip_special_tokens=True)
+                    # note, if s.strip() == "" or just s == ""
+                    # the below reconstructed == s applies at first call
+                    # we can't fully solve this case, so just go with that and always only record the first token
+                    # second may be case if token_id covers parts beyond s (not sure if can apply, just to be safe)
+                    if reconstructed == generation or reconstructed.startswith(generation):
+                        ok = 1
+                        # in order to make sure, we include last one below in cont_toks_cut[:t_i+1]
+                        #  in case cont_toks_cut is not empty (TODO maybe it would not throw any error anyway?)
+                        t_i += 1
+                        break
+                # if not ok:
+                #     print("NOOOOOOOOOO")
+                #     print(s_all)
+                #     print("term", term)
+                #     print("recon", reconstructed)
+                #     print("tok cut", cont_toks_cut)
+                #     print("tok", cont_toks)
+                assert ok  # make sure you set min_new_tokens=2 in generation args
+                # +1 to include eos/until & its logits
+                # since we split at this one, we know it is available and the code cannot break
+                # unless the model only generates eos
+                # note that we assume we require min_tokens=2 is set
+                # VT removed +1 for eos now
+                cont_toks_cut = cont_toks_cut[:t_i]
+
+    # TODO VT NOTE we consider thinking tokens (esp in first generation token extraction).
+    #  TODO MAKE optional how to handle and check what is better for probing
+    if think_end_token:
+        generation = generation.split(think_end_token)[-1].lstrip()
+
+    # VT
+    if cont_toks is None:
+        return generation
+
+    return generation, cont_toks_cut
