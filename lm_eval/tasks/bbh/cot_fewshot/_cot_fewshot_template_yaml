@@ -14,7 +14,7 @@ generation_kwargs:
   until:
     - "</s>"
     - "Q"
-    - "\n\n"
+    #  - "\n\n"  VT does not seem to work w/ gemma
   do_sample: false
   temperature: 0.0
 filter_list:

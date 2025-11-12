@@ -155,6 +155,7 @@ class EvaluationTracker:
         self.point_of_contact = point_of_contact
         self.api = HfApi(token=token) if token else None
         self.gated_repo = gated
+        self.out_postfix = postfix
 
         if not self.api and (push_results_to_hub or push_samples_to_hub):
             raise ValueError(
@@ -314,7 +315,7 @@ class EvaluationTracker:
 
                 for sample in samples:
                     file_results_samples = path.joinpath(
-                        f"samples_{task_name}_{sample['filter_key']}_{self.date_id}.jsonl"
+                        f"samples_{task_name}_{sample['filter']}_{self.date_id}.jsonl"
                     )
 
                     # we first need to sanitize arguments and resps
